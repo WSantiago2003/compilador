@@ -87,5 +87,6 @@ AST* parseBlock();
 AST* parseProgram();
 void printSymbolTable();
 char* nodeTypeToString(NodeType t);
+AST* parseLogical();
 
 #endif

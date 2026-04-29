@@ -9,11 +9,17 @@ int main() {
     printf("===== TESTE TIPAGEM REAL =====\n\n");
 
     strcpy(input,
-        //"bool b;"
-        //"b = ;"
         "int i;"
-        "i = 10 / 2;"
-        //"a = i + 2.5;"
+        //"int j;"
+        //"float x;"
+        //"x = (10 + 5) / (2 + 3);"
+        //"bool b;"
+        //"x = 10.5;"
+        //"x = i + 2.5;"
+        //"x = 10.5;"
+        "i = 2;"
+        //"x = 3.5;"
+        //"b = (int)(i * 2 + x) > 7 || (x < 3);"
     );
 
     printf("Codigo: %s\n", input);

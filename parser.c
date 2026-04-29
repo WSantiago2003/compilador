@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+AST* parseLogical();
+
 char* nodeTypeToString(NodeType t) {
     switch(t) {
         case NODE_INT: return "INT";
@@ -157,12 +159,11 @@ AST* parseFactor() {
         advance();
 
         AST* expr = parseFactor(); // 👈 aplica cast
-
         return createCastNode(type, expr);
     }
 
     // 👇 NÃO É CAST → expressão normal
-    AST* node = parseExpression();
+    AST* node = parseLogical();
 
     if (currentToken.type != T_RPAREN) {
         printf("Erro: esperado ')'\n");
@@ -332,24 +333,30 @@ AST* parseStatement() {
 
     // 3. Se for um ID, significa que é uma ATRIBUIÇÃO
     if (currentToken.type == T_ID) {
-        char varName[100];
-        strcpy(varName, currentToken.lexeme); // Salva o nome da variável (ex: "x")
+    char varName[100];
+    strcpy(varName, currentToken.lexeme);
 
-        advance(); // Pula o ID e vai para o próximo token (deve ser o '=')
+    advance(); // pula ID
 
-        if (currentToken.type == T_ASSIGN) {
-            advance(); // Pula o '=' e vai para a expressão (ex: "2")
+    if (currentToken.type == T_ASSIGN) {
+        advance(); // pula '='
 
-            AST* value = parseLogical();
-            
-            // IMPORTANTE: O ponto e vírgula depois do 'x = 2' 
-            // deve ser tratado aqui ou no loop principal.
-            return createAssignNode(varName, value);
-        } else {
-            printf("Erro: esperado '=' apos o identificador %s\n", varName);
+        AST* value = parseLogical();
+
+        //; necessario
+        if (currentToken.type != T_SEMICOLON) {
+            printf("Erro: esperado ';' apos atribuicao de %s\n", varName);
             exit(1);
         }
+
+        advance(); // consome ;
+
+        return createAssignNode(varName, value);
+    } else {
+        printf("Erro: esperado '=' apos o identificador %s\n", varName);
+        exit(1);
     }
+}
 
     if (currentToken.type == T_WHILE) {
         advance();
@@ -392,10 +399,6 @@ AST* parseBlock() {
 
         // Guarda o comando na lista do bloco
         node->block.children[node->block.count++] = parseStatement();
-
-        if (currentToken.type == T_SEMICOLON) {
-            advance();
-        }
     }
 
     if (currentToken.type == T_RBRACE) {
@@ -429,10 +432,6 @@ AST* parseProgram() {
         }
 
         programNode->block.children[programNode->block.count++] = parseStatement();
-
-        if (currentToken.type == T_SEMICOLON) {
-            advance();
-        }
     }
 
     return programNode;

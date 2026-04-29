@@ -50,7 +50,7 @@ char* tokenToString(TokenType type) {
     }
 }
 
-// ================= AUXILIARES =================
+// AUXILIARES 
 
 int isLetter(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
@@ -60,7 +60,7 @@ int isDigit(char c) {
     return (c >= '0' && c <= '9');
 }
 
-// ================= LEXER =================
+// LEXER 
 
 Token nextToken() 
 {
@@ -75,8 +75,9 @@ Token nextToken()
     char c = input[pos];
 
     // EOF
-    if (c == '\0') {
+    if (input[pos] == '\0') {
         token.type = T_EOF;
+        strcpy(token.lexeme, "EOF");
         return token;
     }
 
@@ -96,8 +97,10 @@ Token nextToken()
         else if (strcmp(token.lexeme, "bool") == 0) token.type = T_BOOL_TYPE;
         else if (strcmp(token.lexeme, "char") == 0) token.type = T_CHAR_TYPE;
         else if (strcmp(token.lexeme, "string") == 0) token.type = T_STRING_TYPE;
-        else if (strcmp(token.lexeme, "true") == 0 || strcmp(token.lexeme, "false") == 0)
+        else if (strcmp(token.lexeme, "true") == 0 || strcmp(token.lexeme, "false") == 0){
             token.type = T_BOOL;
+            return token;
+        }
         else
             token.type = T_ID;
 
@@ -124,7 +127,7 @@ Token nextToken()
     token.type = hasDot ? T_FLOAT : T_INT;
 
     return token;
-}
+    }
 
     // STRINGS
     if (c == '"') {
@@ -164,20 +167,22 @@ Token nextToken()
 
     // OPERADORES
     switch (c) {
-        case '+': token.type = T_PLUS; break;
-        case '-': token.type = T_MINUS; break;
-        case '*': token.type = T_MUL; break;
-        case '/': token.type = T_DIV; break;
+        case '+': token.type = T_PLUS; strcpy(token.lexeme, "+"); break;
+        case '-': token.type = T_MINUS; strcpy(token.lexeme, "-"); break;
+        case '*': token.type = T_MUL; strcpy(token.lexeme, "*"); break;
+        case '/': token.type = T_DIV; strcpy(token.lexeme, "/"); break;
 
-        case '>': token.type = T_GT; break;
-        case '<': token.type = T_LT; break;
+        case '>': token.type = T_GT; strcpy(token.lexeme, ">"); break;
+        case '<': token.type = T_LT; strcpy(token.lexeme, "<"); break;
 
         case '=':
-            if (input[pos+1] == '=') {
-                pos++;
+            if(input[pos + 1] == '=') {
                 token.type = T_EQ;
+                strcpy(token.lexeme, "==");
+                pos++; // Consome o segundo '='
             } else {
                 token.type = T_ASSIGN;
+                strcpy(token.lexeme, "=");
             }
             break;
 
@@ -210,14 +215,14 @@ Token nextToken()
             }
             break;
 
-        case '(': token.type = T_LPAREN; break;
-        case ')': token.type = T_RPAREN; break;
-        case ';': token.type = T_SEMICOLON; break;
-        case '{': token.type = T_LBRACE; break;
-        case '}': token.type = T_RBRACE; break;
-        case ',': token.type = T_COMMA; break;
-        case '[': token.type = T_LBRACKET; break;
-        case ']': token.type = T_RBRACKET; break;
+        case '(': token.type = T_LPAREN; strcpy(token.lexeme, "("); break;
+        case ')': token.type = T_RPAREN; strcpy(token.lexeme, ")"); break;
+        case ';': token.type = T_SEMICOLON; strcpy(token.lexeme, ";"); break;
+        case '{': token.type = T_LBRACE; strcpy(token.lexeme, "{"); break;
+        case '}': token.type = T_RBRACE; strcpy(token.lexeme, "}"); break;
+        case ',': token.type = T_COMMA; strcpy(token.lexeme, ","); break;
+        case '[': token.type = T_LBRACKET; strcpy(token.lexeme, "["); break;
+        case ']': token.type = T_RBRACKET; strcpy(token.lexeme, "]"); break;
 
         default:
             printf("Erro léxico: %c\n", c);

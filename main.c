@@ -3,16 +3,26 @@
 #include "lexer.h"
 #include "parser.h"
 
+extern char input[1000];
+
 int main() {
+    printf("===== TESTE TIPAGEM REAL =====\n\n");
 
     strcpy(input,
-    "x = 2; \
-    if (x > 5) { y = 20; } else { y = 99; }"
+        //"bool b;"
+        //"b = ;"
+        "int i;"
+        "i = 10 / 2;"
+        //"a = i + 2.5;"
     );
 
-    advance();
+    printf("Codigo: %s\n", input);
+    printf("-----------------------------------\n");
 
-    parseProgram();
+    AST* programa = parseProgram();
+    evaluate(programa);
+
+    printSymbolTable();
 
     return 0;
 }

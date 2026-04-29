@@ -1,15 +1,25 @@
 #include "parser.h"
-#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
-AST* parseIf();
-AST* parseBlock();
+char* nodeTypeToString(NodeType t) {
+    switch(t) {
+        case NODE_INT: return "INT";
+        case NODE_FLOAT: return "FLOAT";
+        case NODE_BINOP: return "BINOP";
+        case NODE_VAR: return "VAR";
+        case NODE_ASSIGN: return "ASSIGN";
+        case NODE_IF: return "IF";
+        case NODE_BLOCK: return "BLOCK";
+        case NODE_WHILE: return "WHILE";
+        case NODE_DECL: return "DECL";
+        case NODE_CAST: return "CAST";
+        default: return "UNKNOWN";
+    }
+}
 
-#define MAX_VARS 100
-
-char varNames[MAX_VARS][50];
-float varValues[MAX_VARS];
+Symbol symbolTable[MAX_VARS];
 int varCount = 0;
 
 Token currentToken;
@@ -60,18 +70,50 @@ AST* createAssignNode(char* name, AST* value) {
 
 int findVar(char* name) {
     for (int i = 0; i < varCount; i++) {
-        if (strcmp(varNames[i], name) == 0)
+        if (strcmp(symbolTable[i].name, name) == 0) {
             return i;
+        }
     }
     return -1;
 }
 
-AST* createIfNode(AST* cond, AST* thenB, AST* elseB) {
+void addSymbol(char* name, DataType type) {
+    if (varCount < MAX_VARS) {
+        strcpy(symbolTable[varCount].name, name);
+        symbolTable[varCount].type = type;
+        // Inicializa com zero dependendo do tipo
+        if (type == TYPE_INT) symbolTable[varCount].value.i = 0;
+        else symbolTable[varCount].value.f = 0.0;
+        
+        varCount++;
+    } else {
+        printf("Erro: Tabela de simbolos cheia!\n");
+        exit(1);
+    }
+}
+
+AST* createControl(AST* cond, AST* thenB, AST* elseB) {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_IF;
-    node->ifNode.condition = cond;
-    node->ifNode.thenBranch = thenB;
-    node->ifNode.elseBranch = elseB;
+    node->control.condition = cond;
+    node->control.thenBranch = thenB;
+    node->control.elseBranch = elseB;
+    return node;
+}
+
+AST* createDeclNode(char* name, DataType type) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_DECL;
+    strcpy(node->decl.varName, name);
+    node->decl.type = type;
+    return node;
+}
+
+AST* createCastNode(DataType type, AST* expr) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_CAST;
+    node->cast.type = type;
+    node->cast.expr = expr;
     return node;
 }
 
@@ -92,8 +134,20 @@ AST* parseFactor() {
     }
 
     if (currentToken.type == T_LPAREN) {
+    advance();
+
+    // 👇 TENTA DETECTAR CAST
+    if (currentToken.type == T_INT_TYPE ||
+        currentToken.type == T_FLOAT_TYPE ||
+        currentToken.type == T_BOOL_TYPE) {
+
+        DataType type;
+
+        if (currentToken.type == T_INT_TYPE) type = TYPE_INT;
+        else if (currentToken.type == T_FLOAT_TYPE) type = TYPE_FLOAT;
+        else type = TYPE_BOOL;
+
         advance();
-        node = parseExpression();
 
         if (currentToken.type != T_RPAREN) {
             printf("Erro: esperado ')'\n");
@@ -101,8 +155,23 @@ AST* parseFactor() {
         }
 
         advance();
-        return node;
+
+        AST* expr = parseFactor(); // 👈 aplica cast
+
+        return createCastNode(type, expr);
     }
+
+    // 👇 NÃO É CAST → expressão normal
+    AST* node = parseExpression();
+
+    if (currentToken.type != T_RPAREN) {
+        printf("Erro: esperado ')'\n");
+        exit(1);
+    }
+
+    advance();
+    return node;
+}
 
     if (currentToken.type == T_ID) {
         AST* node = createVarNode(currentToken.lexeme);
@@ -160,6 +229,21 @@ AST* parseRelational() {
     return node;
 }
 
+//logicos
+AST* parseLogical() {
+    AST* node = parseRelational();
+
+    while (currentToken.type == T_AND || currentToken.type == T_OR) {
+        TokenType op = currentToken.type;
+        advance();
+
+        AST* right = parseRelational();
+        node = createBinOpNode(op, node, right);
+    }
+
+    return node;
+}
+
 //parser do IF
 AST* parseIf() {
 
@@ -204,54 +288,116 @@ AST* parseIf() {
         elseBranch = parseBlock(); // 👈 já consome o }
     }
 
-    return createIfNode(condition, thenBranch, elseBranch);
+    return createControl(condition, thenBranch, elseBranch);
 }
 
 AST* parseStatement() {
 
-    // IF
+    if (currentToken.type == T_INT_TYPE ||
+        currentToken.type == T_FLOAT_TYPE ||
+        currentToken.type == T_BOOL_TYPE ||
+        currentToken.type == T_CHAR_TYPE) {
+
+        DataType type;
+
+        if (currentToken.type == T_INT_TYPE) type = TYPE_INT;
+        else if (currentToken.type == T_FLOAT_TYPE) type = TYPE_FLOAT;
+        else if (currentToken.type == T_BOOL_TYPE) type = TYPE_BOOL;
+        else type = TYPE_CHAR;
+
+        advance();
+
+        if (currentToken.type != T_ID) {
+            printf("Erro: esperado identificador\n");
+            exit(1);
+        }
+
+        char name[50];
+        strcpy(name, currentToken.lexeme);
+
+        advance();
+
+        return createDeclNode(name, type);
+    }
+
+    // 1. Pular pontos e vírgulas inúteis
+    while (currentToken.type == T_SEMICOLON) {
+        advance();
+    }
+
+    // 2. Se for IF, chama o parser do IF
     if (currentToken.type == T_IF) {
         return parseIf();
     }
 
-    // ATRIBUIÇÃO
+    // 3. Se for um ID, significa que é uma ATRIBUIÇÃO
     if (currentToken.type == T_ID) {
-
         char varName[100];
-        strcpy(varName, currentToken.lexeme);
+        strcpy(varName, currentToken.lexeme); // Salva o nome da variável (ex: "x")
 
-        advance();
+        advance(); // Pula o ID e vai para o próximo token (deve ser o '=')
 
         if (currentToken.type == T_ASSIGN) {
-            advance();
+            advance(); // Pula o '=' e vai para a expressão (ex: "2")
 
-            AST* value = parseExpression();
+            AST* value = parseLogical();
+            
+            // IMPORTANTE: O ponto e vírgula depois do 'x = 2' 
+            // deve ser tratado aqui ou no loop principal.
             return createAssignNode(varName, value);
         } else {
-            printf("Erro: esperado '='\n");
+            printf("Erro: esperado '=' apos o identificador %s\n", varName);
             exit(1);
         }
     }
 
-    // 👇 IMPORTANTE: evita cair em expressão inválida
-    printf("Erro: comando inválido\n");
+    if (currentToken.type == T_WHILE) {
+        advance();
+        advance(); 
+        AST* cond = parseRelational();
+        advance();
+        
+        if (currentToken.type != T_LBRACE) { printf("Erro: esperado '{'\n"); exit(1); }
+        advance();
+        
+        AST* body = parseBlock(); // já consome o }
+        
+        AST* node = malloc(sizeof(AST));
+        node->type = NODE_WHILE;
+        node->control.condition = cond;
+        node->control.thenBranch = body;
+        node->control.elseBranch = NULL;
+        return node;
+    }
+
+    // Se o token for um '=', um número ou qualquer outra coisa solta:
+    printf("Erro: comando invalido. Nao se pode começar um comando com '%s'\n", currentToken.lexeme);
+    printf("DEBUG: Tentando ler token tipo %d lexema '%s'\n", currentToken.type, currentToken.lexeme);
     exit(1);
 }
 
+
 //parser de bloco
 AST* parseBlock() {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_BLOCK;
+    node->block.count = 0;
 
     while (currentToken.type != T_RBRACE && currentToken.type != T_EOF) {
+        // Ignorar pontos e vírgulas soltos
+        if (currentToken.type == T_SEMICOLON) {
+            advance();
+            continue;
+        }
 
-        AST* stmt = parseStatement();
-        evaluate(stmt);
+        // Guarda o comando na lista do bloco
+        node->block.children[node->block.count++] = parseStatement();
 
         if (currentToken.type == T_SEMICOLON) {
             advance();
         }
     }
 
-    // 👇 CONSOME O '}'
     if (currentToken.type == T_RBRACE) {
         advance();
     } else {
@@ -259,53 +405,115 @@ AST* parseBlock() {
         exit(1);
     }
 
-    return createIntNode(0);
+    return node;
 }
 
-
-
 //multiplas instruçoes
-void parseProgram() {
+AST* parseProgram() {
+    advance(); // Pega o primeiro token
 
-    advance();
+    AST* programNode = malloc(sizeof(AST));
+    programNode->type = NODE_BLOCK;
+    programNode->block.count = 0;
 
     while (currentToken.type != T_EOF) {
-
-        AST* stmt = parseStatement();
-
-        if (stmt->type == NODE_IF) {
-            evaluate(stmt);
-        } else {
-            float result = evaluate(stmt);
-            printf("Resultado: %.2f\n", result);
+        
+        if (currentToken.type == T_SEMICOLON) {
+            advance();
+            continue;
         }
+
+        if (currentToken.lexeme[0] == '\0') {
+            advance();
+            continue;
+        }
+
+        programNode->block.children[programNode->block.count++] = parseStatement();
 
         if (currentToken.type == T_SEMICOLON) {
             advance();
         }
     }
+
+    return programNode;
 }
 
 //funcao de avaliçao da arvore AST
 float evaluate(AST* node) {
 
     if (node == NULL) return 0;
+    printf("DEBUG: Executando %s\n", nodeTypeToString(node->type));
 
-    //if
-    if (node->type == NODE_IF) {
-
-        float cond = evaluate(node->ifNode.condition);
-
-        if (cond != 0) {
-            evaluate(node->ifNode.thenBranch);
-        } else {
-            if (node->ifNode.elseBranch != NULL) {
-                evaluate(node->ifNode.elseBranch);
-            }
+    if (node->type == NODE_DECL) {
+        if (findVar(node->decl.varName) != -1) {
+            printf("Erro: variável já declarada\n");
+            exit(1);
         }
 
+        addSymbol(node->decl.varName, node->decl.type);
         return 0;
     }
+
+    //percorre o bloco
+    if (node->type == 7 || node->type == NODE_BLOCK) {
+        float res = 0;
+        for (int i = 0; i < node->block.count; i++) {
+            res = evaluate(node->block.children[i]);
+        }
+        return res;
+    }
+
+    //if
+    if (node->type == 6 || node->type == NODE_IF) {
+        if (evaluate(node->control.condition) != 0) {
+            return evaluate(node->control.thenBranch);
+        } else if (node->control.elseBranch != NULL) {
+            return evaluate(node->control.elseBranch);
+        }
+        return 0;
+    }
+
+    // atribuição
+    if (node->type == NODE_ASSIGN) {
+    // 1. Avalia o lado direito
+    float val = evaluate(node->assign.value);
+
+    // 2. Procura variável (AGORA É OBRIGATÓRIO EXISTIR)
+    int pos = findVar(node->assign.varName);
+
+    if (pos == -1) {
+        printf("Erro: Variavel '%s' nao declarada!\n", node->assign.varName);
+        exit(1);
+    }
+
+    // 3. Atribuição com conversão por tipo
+    if (symbolTable[pos].type == TYPE_INT) {
+        symbolTable[pos].value.i = (int)val;
+        printf("LOG: INT %s = %d\n",
+            symbolTable[pos].name,
+            symbolTable[pos].value.i);
+
+    } else if (symbolTable[pos].type == TYPE_FLOAT) {
+        symbolTable[pos].value.f = (float) val;
+        printf("LOG: FLOAT %s = %.2f\n",
+            symbolTable[pos].name,
+            symbolTable[pos].value.f);
+
+    } else if (symbolTable[pos].type == TYPE_BOOL) {
+        symbolTable[pos].value.i = (val != 0);  // 👈 AQUI É O BOOLEAN
+        printf("LOG: BOOL %s = %d\n",
+            symbolTable[pos].name,
+            symbolTable[pos].value.i);
+
+    } else if (symbolTable[pos].type == TYPE_CHAR) {
+        symbolTable[pos].value.c = (char)val;
+        printf("LOG: CHAR %s = %c\n",
+            symbolTable[pos].name,
+            symbolTable[pos].value.c);
+    }
+
+    return val;
+}
 
     // número inteiro
     if (node->type == NODE_INT) {
@@ -331,6 +539,8 @@ float evaluate(AST* node) {
             case T_LT: return left < right;
             case T_EQ: return left == right;
             case T_NEQ: return left != right;
+            case T_AND: return (left != 0 && right != 0);
+            case T_OR:  return (left != 0 || right != 0);
 
             default:
                 printf("Operador desconhecido\n");
@@ -338,37 +548,61 @@ float evaluate(AST* node) {
         }
     }
 
-    // variável
-    if (node->type == NODE_VAR) {
-        int idx = findVar(node->varName);
+    //explicita
+    if (node->type == NODE_CAST) {
+        float val = evaluate(node->cast.expr);
 
-        if (idx == -1) {
-            printf("Erro: variável %s não definida\n", node->varName);
-            exit(1);
-        }
-
-        return varValues[idx];
+        if (node->cast.type == TYPE_INT)
+            return (int)val;
+        if (node->cast.type == TYPE_FLOAT)
+            return (float)val;
+        if (node->cast.type == TYPE_BOOL)
+            return (val != 0);
     }
 
-    // atribuição
-    if (node->type == NODE_ASSIGN) {
-        float value = evaluate(node->assign.value);
-
-        int idx = findVar(node->assign.varName);
-
-        if (idx == -1) {
-            strcpy(varNames[varCount], node->assign.varName);
-            varValues[varCount] = value;
-            varCount++;
-        } else {
-            varValues[idx] = value;
+    // variável
+    if (node->type == NODE_VAR) {
+        int pos = findVar(node->varName);
+        if (pos != -1) {
+            if (symbolTable[pos].type == TYPE_INT) {
+                return (float)symbolTable[pos].value.i;
+            } else {
+                return symbolTable[pos].value.f;
+            }
         }
+        printf("Erro: Variavel %s nao encontrada!\n", node->varName);
+        exit(1);
+    }
 
-        return value;
+    
+
+    if (node->type == NODE_WHILE) {
+        while (evaluate(node->control.condition) != 0) {
+            evaluate(node->control.thenBranch);
+        }
+        return 0;
     }
 
     printf("Erro na avaliacao - tipo: %d\n", node->type);
     exit(1);
 
     
+}
+
+void printSymbolTable() {
+    printf("\n--- TABELA DE SIMBOLOS FINAL ---\n");
+    for (int i = 0; i < varCount; i++) {
+        printf("Nome: %-10s | Tipo: ", symbolTable[i].name);
+        
+        if (symbolTable[i].type == TYPE_INT) {
+            printf("INT   | Valor: %d\n", symbolTable[i].value.i);
+        } else if (symbolTable[i].type == TYPE_FLOAT) {
+            printf("FLOAT | Valor: %.2f\n", symbolTable[i].value.f);
+        } else if (symbolTable[i].type == TYPE_BOOL) {
+            printf("BOOL  | Valor: %d\n", symbolTable[i].value.i);
+        } else {
+            printf("OUTRO | Valor: %.2f\n", symbolTable[i].value.f);
+        }
+    }
+    printf("--------------------------------\n");
 }

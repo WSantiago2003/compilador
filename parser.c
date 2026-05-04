@@ -209,7 +209,7 @@ AST* parseFactor() {
     if (currentToken.type == T_LPAREN) {
     advance();
 
-    // 👇 TENTA DETECTAR CAST
+    //TENTA DETECTAR CAST
     if (currentToken.type == T_INT_TYPE ||
         currentToken.type == T_FLOAT_TYPE ||
         currentToken.type == T_BOOL_TYPE) {
@@ -229,11 +229,11 @@ AST* parseFactor() {
 
         advance();
 
-        AST* expr = parseFactor(); // 👈 aplica cast
+        AST* expr = parseFactor(); //aplica cast
         return createCastNode(type, expr);
     }
 
-    // 👇 NÃO É CAST → expressão normal
+    //expressão normal
     AST* node = parseLogical();
 
     if (currentToken.type != T_RPAREN) {
@@ -357,7 +357,7 @@ AST* parseIf() {
         }
 
         advance(); // entra no bloco
-        elseBranch = parseBlock(); // 👈 já consome o }
+        elseBranch = parseBlock();
     }
 
     return createControl(condition, thenBranch, elseBranch);
@@ -438,7 +438,7 @@ AST* parseStatement() {
         if (currentToken.type != T_LBRACE) { printf("Erro: esperado '{'\n"); exit(1); }
         advance();
         
-        AST* body = parseBlock(); // já consome o }
+        AST* body = parseBlock();
         
         AST* node = malloc(sizeof(AST));
         node->type = NODE_WHILE;
@@ -548,7 +548,7 @@ float evaluate(AST* node) {
     // 1. Avalia o lado direito
     float val = evaluate(node->assign.value);
 
-    // 2. Procura variável (AGORA É OBRIGATÓRIO EXISTIR)
+    // 2. Procura variável 
     int pos = findVar(node->assign.varName);
 
     if (pos == -1) {
@@ -570,7 +570,7 @@ float evaluate(AST* node) {
             symbolTable[pos].value.f);
 
     } else if (symbolTable[pos].type == TYPE_BOOL) {
-        symbolTable[pos].value.i = (val != 0);  // 👈 AQUI É O BOOLEAN
+        symbolTable[pos].value.i = (val != 0);
         printf("LOG: BOOL %s = %d\n",
             symbolTable[pos].name,
             symbolTable[pos].value.i);
@@ -657,22 +657,4 @@ float evaluate(AST* node) {
     exit(1);
 
     
-}
-
-void printSymbolTable() {
-    printf("\n--- TABELA DE SIMBOLOS FINAL ---\n");
-    for (int i = 0; i < varCount; i++) {
-        printf("Nome: %-10s | Tipo: ", symbolTable[i].name);
-        
-        if (symbolTable[i].type == TYPE_INT) {
-            printf("INT   | Valor: %d\n", symbolTable[i].value.i);
-        } else if (symbolTable[i].type == TYPE_FLOAT) {
-            printf("FLOAT | Valor: %.2f\n", symbolTable[i].value.f);
-        } else if (symbolTable[i].type == TYPE_BOOL) {
-            printf("BOOL  | Valor: %d\n", symbolTable[i].value.i);
-        } else {
-            printf("OUTRO | Valor: %.2f\n", symbolTable[i].value.f);
-        }
-    }
-    printf("--------------------------------\n");
 }

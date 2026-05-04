@@ -25,10 +25,7 @@ int main(int argc, char *argv[]) {
     printf("-----------------------------------\n");
 
     AST* programa = parseProgram();
-    //evaluate(programa);
     generateTAC(programa);
-
-    //printSymbolTable();
 
     return 0;
 }

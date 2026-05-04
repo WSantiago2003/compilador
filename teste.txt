@@ -1,0 +1,7 @@
+int i;
+float x;
+bool b;
+
+i = 2;
+x = 3.5;
+b = (i * 2 + x > 7) && (x < 5);

@@ -88,5 +88,6 @@ AST* parseProgram();
 void printSymbolTable();
 char* nodeTypeToString(NodeType t);
 AST* parseLogical();
+char* generateTAC(AST* node);
 
 #endif

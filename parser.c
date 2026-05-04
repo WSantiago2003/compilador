@@ -4,6 +4,77 @@
 #include <stdlib.h>
 
 AST* parseLogical();
+int tempCount = 0;
+
+//funcao criar temporários
+char* newTemp() {
+    char* temp = malloc(10);
+    sprintf(temp, "t%d", tempCount++);
+    return temp;
+}
+
+char* generateTAC(AST* node) {
+    if (node == NULL) return NULL;
+
+        //inteiros
+        if (node->type == NODE_INT) {
+        char* val = malloc(10);
+        sprintf(val, "%d", node->intValue);
+        return val;
+    }
+        //float
+        if (node->type == NODE_FLOAT) {
+        char* val = malloc(20);
+        sprintf(val, "%.2f", node->floatValue);
+        return val;
+    }
+        //variavel
+        if (node->type == NODE_VAR) {
+        return strdup(node->varName);
+    }
+        //binario
+        if (node->type == NODE_BINOP) {
+        char* left = generateTAC(node->binop.left);
+        char* right = generateTAC(node->binop.right);
+
+        char* temp = newTemp();
+
+        char op[5];
+
+        switch (node->binop.op) {
+            case T_PLUS: strcpy(op, "+"); break;
+            case T_MINUS: strcpy(op, "-"); break;
+            case T_MUL: strcpy(op, "*"); break;
+            case T_DIV: strcpy(op, "/"); break;
+            case T_GT: strcpy(op, ">"); break;
+            case T_LT: strcpy(op, "<"); break;
+            case T_EQ: strcpy(op, "=="); break;
+            case T_NEQ: strcpy(op, "!="); break;
+            case T_AND: strcpy(op, "&&"); break;
+            case T_OR: strcpy(op, "||"); break;
+        }
+
+        printf("%s = %s %s %s\n", temp, left, op, right);
+
+        return temp;
+    }
+        //atribuiçao
+        if (node->type == NODE_ASSIGN) {
+        char* val = generateTAC(node->assign.value);
+        printf("%s = %s\n", node->assign.varName, val);
+        return NULL;
+    }
+        //bloco
+        if (node->type == NODE_BLOCK) {
+        for (int i = 0; i < node->block.count; i++) {
+            generateTAC(node->block.children[i]);
+        }
+        return NULL;
+    }
+
+    return NULL;
+}
+
 
 char* nodeTypeToString(NodeType t) {
     switch(t) {
@@ -265,16 +336,16 @@ AST* parseIf() {
 
     advance();
 
-    // ===== THEN =====
+    //THEN
     if (currentToken.type != T_LBRACE) {
         printf("Erro: esperado '{'\n");
         exit(1);
     }
 
     advance(); // entra no bloco
-    AST* thenBranch = parseBlock(); // 👈 já consome o }
+    AST* thenBranch = parseBlock(); 
 
-    // ===== ELSE (opcional) =====
+    //ELSE
     AST* elseBranch = NULL;
 
     if (currentToken.type == T_ELSE) {

@@ -3,76 +3,266 @@
 #include <string.h>
 #include <stdlib.h>
 
+int tacPrint = 1;
+int varCount = 0;
 AST* parseLogical();
-int tempCount = 0;
+int findVar(char* name);
 
-//funcao criar temporários
+Symbol symbolTable[MAX_VARS];
+
+
+Token currentToken;
+
+int tempCount = 0;
+DataType tempTypes[100];
+
 char* newTemp() {
     char* temp = malloc(10);
-    sprintf(temp, "t%d", tempCount++);
+    sprintf(temp, "t%d", varCount + tempCount);
+    tempCount++;
     return temp;
 }
 
+char* getVarTemp(char* name) {
+    int pos = findVar(name);
+
+    if (pos == -1) {
+        printf("Erro: variavel %s nao declarada\n", name);
+        exit(1);
+    }
+
+    char* temp = malloc(10);
+    sprintf(temp, "t%d", pos);
+    return temp;
+}
+
+DataType getNodeType(AST* node) {
+
+    if (node->type == NODE_INT)
+        return TYPE_INT;
+
+    if (node->type == NODE_FLOAT)
+        return TYPE_FLOAT;
+
+    if (node->type == NODE_VAR) {
+        int pos = findVar(node->varName);
+
+        if (pos == -1) {
+            printf("Erro: variavel nao declarada\n");
+            exit(1);
+        }
+
+        return symbolTable[pos].type;
+    }
+
+    // BINOP
+    if (node->type == NODE_BINOP) {
+
+        DataType left = getNodeType(node->binop.left);
+        DataType right = getNodeType(node->binop.right);
+
+        // se um dos lados for float -> resultado float
+        if (left == TYPE_FLOAT || right == TYPE_FLOAT)
+            return TYPE_FLOAT;
+
+        return TYPE_INT;
+    }
+
+    return TYPE_INT;
+}
+
+DataType getTempType(int index) {
+    if (index < varCount) {
+        return symbolTable[index].type;
+    }
+
+    return tempTypes[index];
+}
+
+//gera codigo de 3 endereços
 char* generateTAC(AST* node) {
     if (node == NULL) return NULL;
 
-        //inteiros
-        if (node->type == NODE_INT) {
-        char* val = malloc(10);
-        sprintf(val, "%d", node->intValue);
-        return val;
+    if (node->type == NODE_INT) {
+        char* temp = newTemp();
+        int num = atoi(temp + 1);
+        tempTypes[num] = TYPE_INT;
+
+        if (tacPrint)
+            printf("%s = %d;\n", temp, node->intValue);
+
+        return temp;
     }
-        //float
-        if (node->type == NODE_FLOAT) {
-        char* val = malloc(20);
-        sprintf(val, "%.2f", node->floatValue);
-        return val;
+
+    if (node->type == NODE_FLOAT) {
+        char* temp = newTemp();
+        int num = atoi(temp + 1);
+        tempTypes[num] = TYPE_FLOAT;
+
+        if (tacPrint)
+            printf("%s = %.1f;\n", temp, node->floatValue);
+
+        return temp;
     }
-        //variavel
-        if (node->type == NODE_VAR) {
-        return strdup(node->varName);
+
+    if (node->type == NODE_CHAR) {
+        char* temp = newTemp();
+        int num = atoi(temp + 1);
+        tempTypes[num] = TYPE_CHAR;
+
+        if (tacPrint)
+            printf("%s = '%c';\n", temp, node->charValue);
+
+        return temp;
     }
-        //binario
-        if (node->type == NODE_BINOP) {
+
+    if (node->type == NODE_BOOL) {
+        char* temp = newTemp();
+        int num = atoi(temp + 1);
+        tempTypes[num] = TYPE_INT; // bool vira int no código intermediário
+
+        if (tacPrint)
+            printf("%s = %d;\n", temp, node->boolValue);
+
+        return temp;
+    }
+
+    if (node->type == NODE_VAR) {
+        return getVarTemp(node->varName);
+    }
+
+    if (node->type == NODE_BINOP) {
         char* left = generateTAC(node->binop.left);
         char* right = generateTAC(node->binop.right);
 
         char* temp = newTemp();
+        int num = atoi(temp + 1);
 
         char op[5];
 
         switch (node->binop.op) {
-            case T_PLUS: strcpy(op, "+"); break;
+            case T_PLUS:  strcpy(op, "+"); break;
             case T_MINUS: strcpy(op, "-"); break;
-            case T_MUL: strcpy(op, "*"); break;
-            case T_DIV: strcpy(op, "/"); break;
-            case T_GT: strcpy(op, ">"); break;
-            case T_LT: strcpy(op, "<"); break;
-            case T_EQ: strcpy(op, "=="); break;
-            case T_NEQ: strcpy(op, "!="); break;
-            case T_AND: strcpy(op, "&&"); break;
-            case T_OR: strcpy(op, "||"); break;
+            case T_MUL:   strcpy(op, "*"); break;
+            case T_DIV:   strcpy(op, "/"); break;
+            case T_GT:    strcpy(op, ">"); break;
+            case T_LT:    strcpy(op, "<"); break;
+            case T_EQ:    strcpy(op, "=="); break;
+            case T_NEQ:   strcpy(op, "!="); break;
+            case T_AND:   strcpy(op, "&&"); break;
+            case T_OR:    strcpy(op, "||"); break;
+            default:      strcpy(op, "?"); break;
         }
 
-        printf("%s = %s %s %s\n", temp, left, op, right);
+        tempTypes[num] = TYPE_INT;
+
+        if (tacPrint)
+            printf("%s = %s %s %s;\n", temp, left, op, right);
 
         return temp;
     }
-        //atribuiçao
-        if (node->type == NODE_ASSIGN) {
-        char* val = generateTAC(node->assign.value);
-        printf("%s = %s\n", node->assign.varName, val);
+
+    if (node->type == NODE_ASSIGN) {
+        char* varTemp = getVarTemp(node->assign.varName);
+        AST* value = node->assign.value;
+
+        int varNum = atoi(varTemp + 1);
+
+        // atribuição simples: NÃO cria temporário extra
+        if (value->type == NODE_INT) {
+            tempTypes[varNum] = TYPE_INT;
+
+            if (tacPrint)
+                printf("%s = %d;\n", varTemp, value->intValue);
+
+            return NULL;
+        }
+
+        if (value->type == NODE_FLOAT) {
+            tempTypes[varNum] = TYPE_FLOAT;
+
+            if (tacPrint)
+                printf("%s = %.1f;\n", varTemp, value->floatValue);
+
+            return NULL;
+        }
+
+        if (value->type == NODE_CHAR) {
+            tempTypes[varNum] = TYPE_CHAR;
+
+            if (tacPrint)
+                printf("%s = '%c';\n", varTemp, value->charValue);
+
+            return NULL;
+        }
+
+        if (value->type == NODE_BOOL) {
+            tempTypes[varNum] = TYPE_INT;
+
+            if (tacPrint)
+                printf("%s = %d;\n", varTemp, value->boolValue);
+
+            return NULL;
+        }
+
+        // expressão composta: gera temporários normalmente
+        char* val = generateTAC(value);
+
+        //char* tempAssign = newTemp();
+        //int num = atoi(tempAssign + 1);
+        //tempTypes[num] = TYPE_INT;
+
+        if (tacPrint)
+            printf("%s = %s;\n", varTemp, val);
+
         return NULL;
     }
-        //bloco
-        if (node->type == NODE_BLOCK) {
+
+    if (node->type == NODE_BLOCK) {
         for (int i = 0; i < node->block.count; i++) {
             generateTAC(node->block.children[i]);
         }
+
         return NULL;
     }
 
     return NULL;
+}
+
+int countTemps(AST* node) {
+    if (node == NULL) return 0;
+
+    if (node->type == NODE_INT ||
+        node->type == NODE_FLOAT ||
+        node->type == NODE_CHAR ||
+        node->type == NODE_BOOL)
+        return 1;
+
+    if (node->type == NODE_BINOP)
+        return 1 + countTemps(node->binop.left) + countTemps(node->binop.right);
+
+    if (node->type == NODE_ASSIGN) {
+        AST* value = node->assign.value;
+
+        if (value->type == NODE_INT ||
+            value->type == NODE_FLOAT ||
+            value->type == NODE_CHAR ||
+            value->type == NODE_BOOL) {
+            return 0;
+        }
+
+        return countTemps(value);
+    }
+
+    if (node->type == NODE_BLOCK) {
+        int total = 0;
+        for (int i = 0; i < node->block.count; i++)
+            total += countTemps(node->block.children[i]);
+        return total;
+    }
+    
+
+    return 0;
 }
 
 
@@ -91,11 +281,6 @@ char* nodeTypeToString(NodeType t) {
         default: return "UNKNOWN";
     }
 }
-
-Symbol symbolTable[MAX_VARS];
-int varCount = 0;
-
-Token currentToken;
 
 //pegar próximo token
 void advance() {
@@ -244,6 +429,23 @@ AST* parseFactor() {
     advance();
     return node;
 }
+
+    if (currentToken.type == T_CHAR) {
+        node = createCharNode(currentToken.lexeme[0]);
+        advance();
+        return node;
+    }
+
+    if (currentToken.type == T_BOOL) {
+
+        int val =
+            strcmp(currentToken.lexeme, "true") == 0;
+
+        node = createBoolNode(val);
+
+        advance();
+        return node;
+    }
 
     if (currentToken.type == T_ID) {
         AST* node = createVarNode(currentToken.lexeme);
@@ -502,17 +704,50 @@ AST* parseProgram() {
             continue;
         }
 
+        // NOVO CASO: expressão pura
+        if (currentToken.type == T_INT ||
+            currentToken.type == T_FLOAT ||
+            currentToken.type == T_LPAREN) {
+
+            AST* expr = parseLogical();
+
+            // exige ;
+            if (currentToken.type == T_SEMICOLON) {
+                advance();
+            }
+
+            programNode->block.children[programNode->block.count++] = expr;
+            continue;
+        }
         programNode->block.children[programNode->block.count++] = parseStatement();
+
+        
     }
 
     return programNode;
+}
+
+//cria nó char
+AST* createCharNode(char value) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_CHAR;
+    node->charValue = value;
+    return node;
+}
+
+//cria nó boolean
+AST* createBoolNode(int value) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_BOOL;
+    node->boolValue = value;
+    return node;
 }
 
 //funcao de avaliçao da arvore AST
 float evaluate(AST* node) {
 
     if (node == NULL) return 0;
-    printf("DEBUG: Executando %s\n", nodeTypeToString(node->type));
+    //printf("DEBUG: Executando %s\n", nodeTypeToString(node->type));
 
     if (node->type == NODE_DECL) {
         if (findVar(node->decl.varName) != -1) {
@@ -559,27 +794,27 @@ float evaluate(AST* node) {
     // 3. Atribuição com conversão por tipo
     if (symbolTable[pos].type == TYPE_INT) {
         symbolTable[pos].value.i = (int)val;
-        printf("LOG: INT %s = %d\n",
+        /*printf("LOG: INT %s = %d\n",
             symbolTable[pos].name,
-            symbolTable[pos].value.i);
+            symbolTable[pos].value.i);*/
 
     } else if (symbolTable[pos].type == TYPE_FLOAT) {
         symbolTable[pos].value.f = (float) val;
-        printf("LOG: FLOAT %s = %.2f\n",
+        /*printf("LOG: FLOAT %s = %.2f\n",
             symbolTable[pos].name,
-            symbolTable[pos].value.f);
+            symbolTable[pos].value.f);*/
 
     } else if (symbolTable[pos].type == TYPE_BOOL) {
         symbolTable[pos].value.i = (val != 0);
-        printf("LOG: BOOL %s = %d\n",
+        /*printf("LOG: BOOL %s = %d\n",
             symbolTable[pos].name,
-            symbolTable[pos].value.i);
+            symbolTable[pos].value.i);*/
 
     } else if (symbolTable[pos].type == TYPE_CHAR) {
         symbolTable[pos].value.c = (char)val;
-        printf("LOG: CHAR %s = %c\n",
+        /*printf("LOG: CHAR %s = %c\n",
             symbolTable[pos].name,
-            symbolTable[pos].value.c);
+            symbolTable[pos].value.c);*/
     }
 
     return val;
@@ -593,6 +828,16 @@ float evaluate(AST* node) {
     // número float
     if (node->type == NODE_FLOAT) {
         return node->floatValue;
+    }
+
+    //char
+    if (node->type == NODE_CHAR) {
+        return node->charValue;
+    }
+
+    //boolean
+    if (node->type == NODE_BOOL) {
+        return node->boolValue;
     }
 
     // operação binária

@@ -3,6 +3,7 @@
 #define MAX_VARS 100
 #include "lexer.h"
 
+
 typedef enum { TYPE_INT, TYPE_FLOAT, TYPE_BOOL, TYPE_CHAR } DataType;
 
 typedef struct {
@@ -26,7 +27,9 @@ typedef enum {
     NODE_BLOCK,
     NODE_WHILE,
     NODE_DECL,
-    NODE_CAST
+    NODE_CAST,
+    NODE_CHAR,
+    NODE_BOOL,
 } NodeType;
 
 // Estrutura da árvore
@@ -38,6 +41,8 @@ typedef struct AST {
         int intValue;
         float floatValue;
         char varName[50]; 
+        char charValue;
+        int boolValue;
 
         // Operações Binárias (+, -, *, /, >, <, etc)
         struct {
@@ -88,6 +93,15 @@ AST* parseProgram();
 void printSymbolTable();
 char* nodeTypeToString(NodeType t);
 AST* parseLogical();
+int countTemps(AST* node);
 char* generateTAC(AST* node);
+AST* createCharNode(char value);
+AST* createBoolNode(int value);
+DataType getTempType(int index);
 
+
+extern DataType tempTypes[100];
+extern int varCount;
+extern int tempCount;
+extern int tacPrint;
 #endif

@@ -30,6 +30,7 @@ typedef enum {
     NODE_CAST,
     NODE_CHAR,
     NODE_BOOL,
+    NODE_UNOP,
 } NodeType;
 
 // Estrutura da árvore
@@ -79,6 +80,11 @@ typedef struct AST {
             DataType type;
             struct AST* expr;
         } cast;
+
+        struct {
+            TokenType op;
+            struct AST* expr;
+        } unop;
     }; 
     // A union termina aqui. O 'type' lá em cima dirá qual desses campos usar.
 } AST;

@@ -55,6 +55,15 @@ DataType getNodeType(AST* node) {
         return symbolTable[pos].type;
     }
 
+    if (node->type == NODE_CHAR)
+        return TYPE_CHAR;
+
+    if (node->type == NODE_BOOL)
+        return TYPE_BOOL;
+
+    if (node->type == NODE_CAST)
+        return node->cast.type;
+
     // BINOP
     if (node->type == NODE_BINOP) {
 
@@ -131,36 +140,89 @@ char* generateTAC(AST* node) {
         return getVarTemp(node->varName);
     }
 
-    if (node->type == NODE_BINOP) {
-        char* left = generateTAC(node->binop.left);
-        char* right = generateTAC(node->binop.right);
+    if (node->type == NODE_UNOP) {
+
+        char* expr = generateTAC(node->unop.expr);
 
         char* temp = newTemp();
+
         int num = atoi(temp + 1);
-
-        char op[5];
-
-        switch (node->binop.op) {
-            case T_PLUS:  strcpy(op, "+"); break;
-            case T_MINUS: strcpy(op, "-"); break;
-            case T_MUL:   strcpy(op, "*"); break;
-            case T_DIV:   strcpy(op, "/"); break;
-            case T_GT:    strcpy(op, ">"); break;
-            case T_LT:    strcpy(op, "<"); break;
-            case T_EQ:    strcpy(op, "=="); break;
-            case T_NEQ:   strcpy(op, "!="); break;
-            case T_AND:   strcpy(op, "&&"); break;
-            case T_OR:    strcpy(op, "||"); break;
-            default:      strcpy(op, "?"); break;
-        }
 
         tempTypes[num] = TYPE_INT;
 
-        if (tacPrint)
-            printf("%s = %s %s %s;\n", temp, left, op, right);
+        if (node->unop.op == T_NOT) {
+
+            if (tacPrint)
+                printf("%s = !%s;\n", temp, expr);
+        }
 
         return temp;
     }
+
+    if (node->type == NODE_BINOP) {
+    DataType leftType = getNodeType(node->binop.left);
+    DataType rightType = getNodeType(node->binop.right);
+
+    char* left = generateTAC(node->binop.left);
+    char* right = generateTAC(node->binop.right);
+
+    // conversão implícita: int -> float
+    if (leftType == TYPE_INT && rightType == TYPE_FLOAT) {
+        char* castTemp = newTemp();
+        int castNum = atoi(castTemp + 1);
+
+        tempTypes[castNum] = TYPE_FLOAT;
+
+        if (tacPrint)
+            printf("%s = (float) %s;\n", castTemp, left);
+
+        left = castTemp;
+    }
+
+    if (leftType == TYPE_FLOAT && rightType == TYPE_INT) {
+        char* castTemp = newTemp();
+        int castNum = atoi(castTemp + 1);
+
+        tempTypes[castNum] = TYPE_FLOAT;
+
+        if (tacPrint)
+            printf("%s = (float) %s;\n", castTemp, right);
+
+        right = castTemp;
+    }
+
+    char* temp = newTemp();
+    int num = atoi(temp + 1);
+
+    char op[5];
+
+    switch (node->binop.op) {
+        case T_PLUS:  strcpy(op, "+"); break;
+        case T_MINUS: strcpy(op, "-"); break;
+        case T_MUL:   strcpy(op, "*"); break;
+        case T_DIV:   strcpy(op, "/"); break;
+        case T_GT:    strcpy(op, ">"); break;
+        case T_LT:    strcpy(op, "<"); break;
+        case T_EQ:    strcpy(op, "=="); break;
+        case T_NEQ:   strcpy(op, "!="); break;
+        case T_AND:   strcpy(op, "&&"); break;
+        case T_OR:    strcpy(op, "||"); break;
+        default:      strcpy(op, "?"); break;
+    }
+
+    if (node->binop.op == T_GT || node->binop.op == T_LT ||
+        node->binop.op == T_EQ || node->binop.op == T_NEQ ||
+        node->binop.op == T_AND || node->binop.op == T_OR) {
+        tempTypes[num] = TYPE_INT;
+    } else {
+        tempTypes[num] = getNodeType(node);
+    }
+
+    if (tacPrint)
+        printf("%s = %s %s %s;\n", temp, left, op, right);
+
+    return temp;
+}
 
     if (node->type == NODE_ASSIGN) {
         char* varTemp = getVarTemp(node->assign.varName);
@@ -218,6 +280,50 @@ char* generateTAC(AST* node) {
         return NULL;
     }
 
+    if (node->type == NODE_DECL) {
+        return NULL;
+    }
+
+    if (node->type == NODE_CAST) {
+
+        char* expr = generateTAC(node->cast.expr);
+
+        char* temp = newTemp();
+        int num = atoi(temp + 1);
+
+        // define o tipo do temporário
+        tempTypes[num] = node->cast.type;
+
+        char typeName[10];
+
+        switch (node->cast.type) {
+            case TYPE_INT:
+                strcpy(typeName, "int");
+                break;
+
+            case TYPE_FLOAT:
+                strcpy(typeName, "float");
+                break;
+
+            case TYPE_BOOL:
+                strcpy(typeName, "bool");
+                break;
+
+            case TYPE_CHAR:
+                strcpy(typeName, "char");
+                break;
+
+            default:
+                strcpy(typeName, "?");
+                break;
+        }
+
+        if (tacPrint)
+            printf("%s = (%s) %s;\n", temp, typeName, expr);
+
+        return temp;
+    }
+
     if (node->type == NODE_BLOCK) {
         for (int i = 0; i < node->block.count; i++) {
             generateTAC(node->block.children[i]);
@@ -238,8 +344,26 @@ int countTemps(AST* node) {
         node->type == NODE_BOOL)
         return 1;
 
-    if (node->type == NODE_BINOP)
-        return 1 + countTemps(node->binop.left) + countTemps(node->binop.right);
+    if (node->type == NODE_CAST) {
+        return 1 + countTemps(node->cast.expr);
+    }
+
+    if (node->type == NODE_BINOP) {
+        int total = 1 + countTemps(node->binop.left) + countTemps(node->binop.right);
+
+        DataType leftType = getNodeType(node->binop.left);
+        DataType rightType = getNodeType(node->binop.right);
+
+        if ((leftType == TYPE_INT && rightType == TYPE_FLOAT) ||
+            (leftType == TYPE_FLOAT && rightType == TYPE_INT)) {
+            total++;
+        }
+
+        return total;
+    }
+
+    if (node->type == NODE_UNOP)
+        return 1 + countTemps(node->unop.expr);
 
     if (node->type == NODE_ASSIGN) {
         AST* value = node->assign.value;
@@ -375,8 +499,27 @@ AST* createCastNode(DataType type, AST* expr) {
     return node;
 }
 
+AST* createUnOpNode(TokenType op, AST* expr) {
+    AST* node = malloc(sizeof(AST));
+
+    node->type = NODE_UNOP;
+    node->unop.op = op;
+    node->unop.expr = expr;
+
+    return node;
+}
+
 //PARSER
 AST* parseFactor() {
+
+    if (currentToken.type == T_NOT) {
+        advance();
+
+        AST* expr = parseFactor();
+
+        return createUnOpNode(T_NOT, expr);
+    }
+
     AST* node;
 
     if (currentToken.type == T_INT) {
@@ -591,6 +734,15 @@ AST* parseStatement() {
 
         advance();
 
+        if (currentToken.type != T_SEMICOLON) {
+            printf("Erro: esperado ';' apos declaracao de %s\n", name);
+            exit(1);
+        }
+
+    advance();
+
+    return createDeclNode(name, type);
+
         return createDeclNode(name, type);
     }
 
@@ -617,7 +769,7 @@ AST* parseStatement() {
         AST* value = parseLogical();
 
         //; necessario
-        if (currentToken.type != T_SEMICOLON) {
+           if (currentToken.type != T_SEMICOLON) {
             printf("Erro: esperado ';' apos atribuicao de %s\n", varName);
             exit(1);
         }
@@ -838,6 +990,20 @@ float evaluate(AST* node) {
     //boolean
     if (node->type == NODE_BOOL) {
         return node->boolValue;
+    }
+
+    if (node->type == NODE_UNOP) {
+
+        float val = evaluate(node->unop.expr);
+
+        switch (node->unop.op) {
+            case T_NOT:
+                return !val;
+
+            default:
+                printf("Operador unario desconhecido\n");
+                exit(1);
+        }
     }
 
     // operação binária

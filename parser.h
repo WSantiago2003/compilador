@@ -157,6 +157,7 @@ DataType getTempType(int index);
 
 extern DataType tempTypes[100];
 extern int varCount;
+extern int labelCount;
 extern int tempCount;
 extern int tacPrint;
 void printIndent(int indent);

@@ -56,7 +56,6 @@ typedef enum {
     T_STRING_TYPE,
     T_PRINT,
     T_READ,
-    T_DO,
     T_SWITCH,
     T_CASE,
     T_DEFAULT,

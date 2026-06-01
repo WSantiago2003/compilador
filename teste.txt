@@ -1,5 +1,11 @@
-int numero;
-print("Digite um numero inteiro: ");
-read(numero);
-print("Você digitou o numero: ");
-print(numero);
+int estoque;
+estoque = 15;
+
+print("Atualizando inventario...");
+
+
+saida = 2; 
+
+estoque = estoque - saida;
+
+print(estoque);

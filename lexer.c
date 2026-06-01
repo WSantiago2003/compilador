@@ -91,6 +91,7 @@ Token nextToken()
         // palavras-chave
         
         if (strcmp(token.lexeme, "if") == 0) token.type = T_IF;
+        else if (strcmp(token.lexeme, "else") == 0) token.type = T_ELSE;
         else if (strcmp(token.lexeme, "while") == 0) token.type = T_WHILE;
         else if (strcmp(token.lexeme, "do") == 0) token.type = T_DO;
         else if (strcmp(token.lexeme, "switch") == 0) token.type = T_SWITCH;

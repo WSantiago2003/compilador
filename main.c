@@ -51,6 +51,7 @@ int main(int argc, char *argv[]) {
     // Imprime as instruções TAC
     tacPrint = 1;
     tempCount = 0;
+    labelCount = 0;
     generateTAC(programa);
 
 

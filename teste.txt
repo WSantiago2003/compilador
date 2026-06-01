@@ -1,3 +1,5 @@
-int I;
-float F;
-I = (int) F;
+int numero;
+print("Digite um numero inteiro: ");
+read(numero);
+print("Você digitou o numero: ");
+print(numero);

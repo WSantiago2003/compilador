@@ -5,6 +5,7 @@
 
 int tacPrint = 1;
 int varCount = 0;
+int currentScope = 0;
 AST* parseLogical();
 int findVar(char* name);
 
@@ -112,6 +113,24 @@ char* generateTAC(AST* node) {
             printf("%s = %.1f;\n", temp, node->floatValue);
 
         return temp;
+    }
+
+    if (node->type == NODE_STRING) {
+        char* temp = malloc(255);
+        sprintf(temp, "\"%s\"", node->stringValue);
+        return temp; 
+    }
+
+    if (node->type == NODE_PRINT) {
+        char* expr = generateTAC(node->printStmt.expr);
+        if (tacPrint) printf("print %s;\n", expr);
+        return NULL;
+    }
+
+    if (node->type == NODE_READ) {
+        char* varTemp = getVarTemp(node->readStmt.varName);
+        if (tacPrint) printf("read %s;\n", varTemp);
+        return NULL;
     }
 
     if (node->type == NODE_CHAR) {
@@ -451,21 +470,35 @@ AST* createAssignNode(char* name, AST* value) {
 }
 
 int findVar(char* name) {
-    for (int i = 0; i < varCount; i++) {
+    // Busca de trás para frente (prioriza o escopo mais interno)
+    for (int i = varCount - 1; i >= 0; i--) {
         if (strcmp(symbolTable[i].name, name) == 0) {
             return i;
         }
     }
-    return -1;
+    return -1; // Não encontrou em nenhum escopo
 }
 
 void addSymbol(char* name, DataType type) {
+    // Verifica se a variável já existe NO MESMO ESCOPO
+    for (int i = varCount - 1; i >= 0; i--) {
+        if (symbolTable[i].scope < currentScope) break; // Saiu do escopo atual, pode parar de procurar
+        
+        if (strcmp(symbolTable[i].name, name) == 0) {
+            printf("Erro: Variavel '%s' ja declarada neste escopo!\n", name);
+            exit(1);
+        }
+    }
+
     if (varCount < MAX_VARS) {
         strcpy(symbolTable[varCount].name, name);
         symbolTable[varCount].type = type;
-        // Inicializa com zero dependendo do tipo
+        symbolTable[varCount].scope = currentScope; // Salva o escopo atual
+        
+        // Inicializa com zero
         if (type == TYPE_INT) symbolTable[varCount].value.i = 0;
-        else symbolTable[varCount].value.f = 0.0;
+        else if (type == TYPE_FLOAT) symbolTable[varCount].value.f = 0.0;
+        else if (type == TYPE_CHAR) symbolTable[varCount].value.c = '\0';
         
         varCount++;
     } else {
@@ -530,6 +563,12 @@ AST* parseFactor() {
 
     if (currentToken.type == T_FLOAT) {
         node = createFloatNode(atof(currentToken.lexeme));
+        advance();
+        return node;
+    }
+
+    if (currentToken.type == T_STRING) {
+        node = createStringNode(currentToken.lexeme);
         advance();
         return node;
     }
@@ -708,7 +747,141 @@ AST* parseIf() {
     return createControl(condition, thenBranch, elseBranch);
 }
 
+AST* createForNode(AST* init, AST* cond, AST* inc, AST* body) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_FOR;
+    node->forLoop.init = init;
+    node->forLoop.condition = cond;
+    node->forLoop.increment = inc;
+    node->forLoop.body = body;
+    return node;
+}
+
+AST* createDoWhileNode(AST* body, AST* cond) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_DO_WHILE;
+    node->doWhileLoop.body = body;
+    node->doWhileLoop.condition = cond;
+    return node;
+}
+
+AST* createBreakNode() {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_BREAK;
+    return node;
+}
+
+AST* createContinueNode() {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_CONTINUE;
+    return node;
+}
+
 AST* parseStatement() {
+
+    // PARSING: BREAK e CONTINUE
+    if (currentToken.type == T_BREAK) {
+        advance();
+        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
+        advance();
+        return createBreakNode();
+    }
+
+    if (currentToken.type == T_CONTINUE) {
+        advance();
+        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
+        advance();
+        return createContinueNode();
+    }
+
+    // PARSING: DO / WHILE
+    if (currentToken.type == T_DO) {
+        advance(); // pula "do"
+        if (currentToken.type != T_LBRACE) { printf("Erro: esperado '{'\n"); exit(1); }
+        advance();
+        
+        AST* body = parseBlock(); // lê o bloco de código
+        
+        if (currentToken.type != T_WHILE) { printf("Erro: esperado 'while'\n"); exit(1); }
+        advance();
+        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
+        advance();
+        
+        AST* cond = parseRelational();
+        
+        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
+        advance();
+        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
+        advance();
+        
+        return createDoWhileNode(body, cond);
+    }
+
+    // PARSING: FOR
+    if (currentToken.type == T_FOR) {
+        advance(); // pula "for"
+        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
+        advance();
+        
+        // Inicialização
+        AST* init = parseStatement(); // parseStatement já consome o ';'
+        
+        // Condição
+        AST* cond = parseRelational();
+        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
+        advance();
+        
+        // Incremento (Lemos como uma atribuição simples, mas sem o ';' no final)
+        AST* inc = NULL;
+        if (currentToken.type == T_ID) {
+            char varName[100];
+            strcpy(varName, currentToken.lexeme);
+            advance();
+            if (currentToken.type == T_ASSIGN) {
+                advance();
+                AST* val = parseLogical();
+                inc = createAssignNode(varName, val);
+            }
+        }
+        
+        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
+        advance();
+        if (currentToken.type != T_LBRACE) { printf("Erro: esperado '{'\n"); exit(1); }
+        advance();
+        
+        AST* body = parseBlock();
+        
+        return createForNode(init, cond, inc, body);
+    }
+
+    if (currentToken.type == T_PRINT) {
+        advance(); // pula "print"
+        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
+        advance();
+        AST* expr = parseLogical();
+        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
+        advance();
+        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
+        advance();
+        return createPrintNode(expr);
+    }
+
+    if (currentToken.type == T_READ) {
+        advance(); // pula "read"
+        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
+        advance();
+        if (currentToken.type != T_ID) { printf("Erro: esperado identificador\n"); exit(1); }
+        
+        char varName[50];
+        strcpy(varName, currentToken.lexeme);
+        advance();
+        
+        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
+        advance();
+        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
+        advance();
+        return createReadNode(varName);
+    }
 
     if (currentToken.type == T_INT_TYPE ||
         currentToken.type == T_FLOAT_TYPE ||
@@ -815,14 +988,14 @@ AST* parseBlock() {
     node->type = NODE_BLOCK;
     node->block.count = 0;
 
+    int variablesBeforeBlock = varCount; // Salva o estado da tabela antes do bloco
+    currentScope++;                      // Entra em um novo escopo (Contexto Local)
+
     while (currentToken.type != T_RBRACE && currentToken.type != T_EOF) {
-        // Ignorar pontos e vírgulas soltos
         if (currentToken.type == T_SEMICOLON) {
             advance();
             continue;
         }
-
-        // Guarda o comando na lista do bloco
         node->block.children[node->block.count++] = parseStatement();
     }
 
@@ -832,6 +1005,9 @@ AST* parseBlock() {
         printf("Erro: esperado '}'\n");
         exit(1);
     }
+
+    currentScope--;                  // Volta para o escopo anterior
+    varCount = variablesBeforeBlock; // Remove as variáveis locais da memória (Pilha)
 
     return node;
 }
@@ -892,6 +1068,27 @@ AST* createBoolNode(int value) {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_BOOL;
     node->boolValue = value;
+    return node;
+}
+
+AST* createStringNode(char* value) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_STRING;
+    strcpy(node->stringValue, value);
+    return node;
+}
+
+AST* createPrintNode(AST* expr) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_PRINT;
+    node->printStmt.expr = expr;
+    return node;
+}
+
+AST* createReadNode(char* varName) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_READ;
+    strcpy(node->readStmt.varName, varName);
     return node;
 }
 
@@ -1069,3 +1266,227 @@ float evaluate(AST* node) {
 
     
 }
+// Imprime a indentação para manter o código C gerado organizado
+void printIndent(int indent) {
+    for(int i = 0; i < indent; i++) {
+        printf("    ");
+    }
+}
+
+// Gera o código C para Expressões (números, variáveis, operações, cast)
+void generateC_expr(AST* node) {
+    if (!node) return;
+
+    switch(node->type) {
+        case NODE_INT:
+            printf("%d", node->intValue);
+            break;
+        case NODE_FLOAT:
+            printf("%.1f", node->floatValue);
+            break;
+        case NODE_CHAR:
+            printf("'%c'", node->charValue);
+            break;
+        case NODE_BOOL:
+            printf("%s", node->boolValue ? "true" : "false");
+            break;
+        case NODE_VAR:
+            printf("%s", node->varName);
+            break;
+        case NODE_BINOP:
+            printf("(");
+            generateC_expr(node->binop.left);
+            switch(node->binop.op) {
+                case T_PLUS:  printf(" + "); break;
+                case T_MINUS: printf(" - "); break;
+                case T_MUL:   printf(" * "); break;
+                case T_DIV:   printf(" / "); break;
+                case T_GT:    printf(" > "); break;
+                case T_LT:    printf(" < "); break;
+                case T_EQ:    printf(" == "); break;
+                case T_NEQ:   printf(" != "); break;
+                case T_AND:   printf(" && "); break;
+                case T_OR:    printf(" || "); break;
+                case NODE_STRING:   printf("\"%s\"", node->stringValue); break;
+                default: break;
+            }
+            generateC_expr(node->binop.right);
+            printf(")");
+            break;
+        case NODE_UNOP:
+            if (node->unop.op == T_NOT) printf("!");
+            generateC_expr(node->unop.expr);
+            break;
+        case NODE_CAST:
+            printf("(");
+            switch(node->cast.type) {
+                case TYPE_INT:   printf("(int)"); break;
+                case TYPE_FLOAT: printf("(float)"); break;
+                case TYPE_CHAR:  printf("(char)"); break;
+                case TYPE_BOOL:  printf("(bool)"); break;
+            }
+            generateC_expr(node->cast.expr);
+            printf(")");
+            break;
+        default:
+            break;
+    }
+}
+
+// Gera o código C para Statements (Declarações, Blocos, If, While)
+void generateC(AST* node, int indent) {
+    if (!node) return;
+
+    switch(node->type) {
+        case NODE_BLOCK:
+            for(int i = 0; i < node->block.count; i++) {
+                generateC(node->block.children[i], indent);
+            }
+            break;
+
+        case NODE_DECL:
+            printIndent(indent);
+            switch(node->decl.type) {
+                case TYPE_INT:   printf("int "); break;
+                case TYPE_FLOAT: printf("float "); break;
+                case TYPE_CHAR:  printf("char "); break;
+                case TYPE_BOOL:  printf("bool "); break;
+            }
+            printf("%s;\n", node->decl.varName);
+            break;
+
+        case NODE_PRINT:
+            printIndent(indent);
+            DataType t = getNodeType(node->printStmt.expr);
+            if (t == TYPE_INT || t == TYPE_BOOL) printf("printf(\"%%d\\n\", ");
+            else if (t == TYPE_FLOAT) printf("printf(\"%%.2f\\n\", ");
+            else if (t == TYPE_CHAR) printf("printf(\"%%c\\n\", ");
+            else if (t == TYPE_STRING) printf("printf(\"%%s\\n\", ");
+            generateC_expr(node->printStmt.expr);
+            printf(");\n");
+            break;
+
+        case NODE_READ:
+            printIndent(indent);
+            int pos = findVar(node->readStmt.varName);
+            if (pos == -1) {
+                printf("Erro: Variável não declarada na leitura.\n");
+                exit(1);
+            }
+            DataType tr = symbolTable[pos].type;
+            if (tr == TYPE_INT || tr == TYPE_BOOL) printf("scanf(\"%%d\", &%s);\n", node->readStmt.varName);
+            else if (tr == TYPE_FLOAT) printf("scanf(\"%%f\", &%s);\n", node->readStmt.varName);
+            else if (tr == TYPE_CHAR) printf("scanf(\" %%c\", &%s);\n", node->readStmt.varName);
+            break;
+        
+        case NODE_ASSIGN:
+            printIndent(indent);
+            printf("%s = ", node->assign.varName);
+            generateC_expr(node->assign.value);
+            printf(";\n");
+            break;
+
+        case NODE_IF:
+            printIndent(indent);
+            printf("if (");
+            generateC_expr(node->control.condition);
+            printf(") {\n");
+            
+            if (node->control.thenBranch) {
+                generateC(node->control.thenBranch, indent + 1);
+            }
+            
+            printIndent(indent);
+            printf("}\n");
+            
+            if (node->control.elseBranch) {
+                printIndent(indent);
+                printf("else {\n");
+                generateC(node->control.elseBranch, indent + 1);
+                printIndent(indent);
+                printf("}\n");
+            }
+            break;
+
+        case NODE_WHILE:
+            printIndent(indent);
+            printf("while (");
+            generateC_expr(node->control.condition);
+            printf(") {\n");
+            
+            if (node->control.thenBranch) {
+                generateC(node->control.thenBranch, indent + 1);
+            }
+            
+            printIndent(indent);
+            printf("}\n");
+            break;
+
+        case NODE_BREAK:
+            printIndent(indent);
+            printf("break;\n");
+            break;
+
+        case NODE_CONTINUE:
+            printIndent(indent);
+            printf("continue;\n");
+            break;
+
+        case NODE_DO_WHILE:
+            printIndent(indent);
+            printf("do {\n");
+            if (node->doWhileLoop.body) {
+                generateC(node->doWhileLoop.body, indent + 1);
+            }
+            printIndent(indent);
+            printf("} while (");
+            generateC_expr(node->doWhileLoop.condition);
+            printf(");\n");
+            break;
+
+        case NODE_FOR:
+            printIndent(indent);
+            printf("for (");
+            // A inicialização gera um statement com ';' e quebra de linha. 
+            // Para ficar na mesma linha do FOR no C, extraímos apenas a expressão se for atribuição.
+            if (node->forLoop.init && node->forLoop.init->type == NODE_ASSIGN) {
+                printf("%s = ", node->forLoop.init->assign.varName);
+                generateC_expr(node->forLoop.init->assign.value);
+            }
+            printf("; ");
+            
+            generateC_expr(node->forLoop.condition);
+            printf("; ");
+            
+            if (node->forLoop.increment && node->forLoop.increment->type == NODE_ASSIGN) {
+                printf("%s = ", node->forLoop.increment->assign.varName);
+                generateC_expr(node->forLoop.increment->assign.value);
+            }
+            printf(") {\n");
+            
+            if (node->forLoop.body) {
+                generateC(node->forLoop.body, indent + 1);
+            }
+            printIndent(indent);
+            printf("}\n");
+            break;    
+
+        // Se expressões soltas acabarem dentro do bloco (avulsas)
+        case NODE_INT:
+        case NODE_FLOAT:
+        case NODE_CHAR:
+        case NODE_BOOL:
+        case NODE_VAR:
+        case NODE_BINOP:
+        case NODE_UNOP:
+        case NODE_CAST:
+            printIndent(indent);
+            generateC_expr(node);
+            printf(";\n");
+            break;
+
+        default:
+            break;
+    }
+}
+

@@ -54,6 +54,15 @@ typedef enum {
     T_BOOL_TYPE,
     T_CHAR_TYPE,
     T_STRING_TYPE,
+    T_PRINT,
+    T_READ,
+    T_DO,
+    T_SWITCH,
+    T_CASE,
+    T_DEFAULT,
+    T_BREAK,
+    T_CONTINUE,
+    T_COLON,
 
     T_EOF
 

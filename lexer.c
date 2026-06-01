@@ -89,14 +89,23 @@ Token nextToken()
         token.lexeme[i] = '\0';
 
         // palavras-chave
+        
         if (strcmp(token.lexeme, "if") == 0) token.type = T_IF;
         else if (strcmp(token.lexeme, "while") == 0) token.type = T_WHILE;
+        else if (strcmp(token.lexeme, "do") == 0) token.type = T_DO;
+        else if (strcmp(token.lexeme, "switch") == 0) token.type = T_SWITCH;
+        else if (strcmp(token.lexeme, "case") == 0) token.type = T_CASE;
+        else if (strcmp(token.lexeme, "default") == 0) token.type = T_DEFAULT;
+        else if (strcmp(token.lexeme, "break") == 0) token.type = T_BREAK;
+        else if (strcmp(token.lexeme, "continue") == 0) token.type = T_CONTINUE;
         else if (strcmp(token.lexeme, "for") == 0) token.type = T_FOR;
         else if (strcmp(token.lexeme, "int") == 0) token.type = T_INT_TYPE;
         else if (strcmp(token.lexeme, "float") == 0) token.type = T_FLOAT_TYPE;
         else if (strcmp(token.lexeme, "bool") == 0) token.type = T_BOOL_TYPE;
         else if (strcmp(token.lexeme, "char") == 0) token.type = T_CHAR_TYPE;
         else if (strcmp(token.lexeme, "string") == 0) token.type = T_STRING_TYPE;
+        else if (strcmp(token.lexeme, "print") == 0) token.type = T_PRINT;
+        else if (strcmp(token.lexeme, "read") == 0) token.type = T_READ;
         else if (strcmp(token.lexeme, "true") == 0 || strcmp(token.lexeme, "false") == 0){
             token.type = T_BOOL;
             return token;
@@ -171,7 +180,7 @@ Token nextToken()
         case '-': token.type = T_MINUS; strcpy(token.lexeme, "-"); break;
         case '*': token.type = T_MUL; strcpy(token.lexeme, "*"); break;
         case '/': token.type = T_DIV; strcpy(token.lexeme, "/"); break;
-
+        case ':': token.type = T_COLON; strcpy(token.lexeme, ":"); break;
         case '>': token.type = T_GT; strcpy(token.lexeme, ">"); break;
         case '<': token.type = T_LT; strcpy(token.lexeme, "<"); break;
 

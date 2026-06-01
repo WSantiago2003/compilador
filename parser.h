@@ -4,11 +4,12 @@
 #include "lexer.h"
 
 
-typedef enum { TYPE_INT, TYPE_FLOAT, TYPE_BOOL, TYPE_CHAR } DataType;
+typedef enum { TYPE_INT, TYPE_FLOAT, TYPE_BOOL, TYPE_CHAR, TYPE_STRING } DataType;
 
 typedef struct {
     char name[50];
     DataType type;
+    int scope;
     union {
         int i;
         float f;
@@ -31,6 +32,16 @@ typedef enum {
     NODE_CHAR,
     NODE_BOOL,
     NODE_UNOP,
+    NODE_STRING,
+    NODE_PRINT,
+    NODE_READ,
+    NODE_FOR,
+    NODE_DO_WHILE,
+    NODE_SWITCH,
+    NODE_CASE,
+    NODE_BREAK,
+    NODE_CONTINUE,
+
 } NodeType;
 
 // Estrutura da árvore
@@ -52,6 +63,16 @@ typedef struct AST {
             struct AST* right;
         } binop;
 
+        char stringValue[255]; // Para armazenar o texto da string
+
+        struct {
+            struct AST* expr;
+        } printStmt;
+
+        struct {
+            char varName[50];
+        } readStmt;
+
         // Atribuição (x = valor)
         struct {
             char varName[50];
@@ -70,6 +91,7 @@ typedef struct AST {
             struct AST* thenBranch;
             struct AST* elseBranch; // No WHILE, isso ficará como NULL
         } control;
+        
 
         struct {
             char varName[50];
@@ -85,6 +107,33 @@ typedef struct AST {
             TokenType op;
             struct AST* expr;
         } unop;
+
+        // For (init; cond; inc) { body }
+        struct {
+            struct AST* init;
+            struct AST* condition;
+            struct AST* increment;
+            struct AST* body;
+        } forLoop;
+
+        // Do { body } while (cond);
+        struct {
+            struct AST* body;
+            struct AST* condition;
+        } doWhileLoop;
+
+        // Switch (expr) { cases }
+        struct {
+            struct AST* expr;
+            struct AST* cases[20]; // Suporta até 20 cases por switch
+            int caseCount;
+        } switchStmt;
+
+        // case expr: body
+        struct {
+            struct AST* matchExpr; // Se for NULL, representa o "default"
+            struct AST* body;
+        } caseStmt;
     }; 
     // A union termina aqui. O 'type' lá em cima dirá qual desses campos usar.
 } AST;
@@ -110,4 +159,10 @@ extern DataType tempTypes[100];
 extern int varCount;
 extern int tempCount;
 extern int tacPrint;
+void printIndent(int indent);
+void generateC_expr(AST* node);
+void generateC(AST* node, int indent);
+AST* createStringNode(char* value);
+AST* createPrintNode(AST* expr);
+AST* createReadNode(char* varName);
 #endif

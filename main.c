@@ -23,46 +23,57 @@ int main(int argc, char *argv[]) {
     printf("Codigo lido:\n%s\n", input);
     printf("-----------------------------------\n");
 
-    // Cria a Árvore Sintática Abstrata (AST)
     AST* programa = parseProgram();
 
-    // --- 1. GERAÇÃO DO CÓDIGO INTERMEDIÁRIO (TAC) ---
-    printf("\n=== CODIGO INTERMEDIARIO (TAC) ===\n");
+    // --- 1. SELEÇÃO DA PRIMEIRA PASSADA (SILENCIOSA) ---
     evaluate(programa);
     int totalTemps = countTemps(programa);
 
+    // Passada 1: Silenciosa para mapear tipos e CONTAR LABELS (guarda o valor final em labelCount)
     tacPrint = 0;
-    tempCount = 0;
-    generateTAC(programa);
-
-    // Imprime as declarações dos temporários
-    for (int i = 0; i < varCount + totalTemps; i++) {
-        DataType type = getTempType(i);
-
-        if (type == TYPE_FLOAT)
-            printf("float t%d;\n", i);
-        else if (type == TYPE_CHAR)
-            printf("char t%d;\n", i);
-        else
-            printf("int t%d;\n", i);
-    }
-    printf("\n");
-
-    // Imprime as instruções TAC
-    tacPrint = 1;
     tempCount = 0;
     labelCount = 0;
     generateTAC(programa);
 
+    // Armazena a quantidade total de labels gerados na passada silenciosa
+    int totalLabels = labelCount;
 
-    // --- 2. GERAÇÃO DO CÓDIGO C ---
+
+    // --- 2. GERAÇÃO DO CÓDIGO C (BASEADO NO TAC) ---
     printf("\n=== CODIGO C GERADO ===\n");
     printf("#include <stdio.h>\n");
     printf("#include <stdbool.h>\n\n");
     printf("int main() {\n");
     
-    // Inicia a geração de código C com nível de indentação 1 (4 espaços)
-    generateC(programa, 1);
+    printf("    // Variaveis Temporarias do TAC\n");
+    for (int i = 0; i < varCount + totalTemps; i++) {
+        DataType type = getTempType(i);
+        if (type == TYPE_FLOAT) printf("    float t%d;\n", i);
+        else if (type == TYPE_CHAR) printf("    char t%d;\n", i);
+        else printf("    int t%d;\n", i);
+    }
+
+    // --- DECLARAÇÃO DOS LABELS NO TOPO DA MAIN DO C ---
+    if (totalLabels > 0) {
+        printf("\n    // Declaracao dos Labels do TAC\n");
+        printf("    __label__ ");
+        for (int i = 0; i < totalLabels; i++) {
+            printf("L%d", i);
+            if (i < totalLabels - 1) {
+                printf(", ");
+            }
+        }
+        printf(";\n");
+    }
+    printf("\n");
+
+    // Configura para o Modo 2 (Gera o TAC convertido na sintaxe do C)
+    tacPrint = 2; 
+    tempCount = 0;
+    labelCount = 0; // Reseta para começar a imprimir a partir de L0, L1... de forma idêntica
+    
+    // Executa a árvore traduzindo os blocos e laços diretamente em rótulos e desvios lineares
+    generateTAC(programa); 
     
     printf("    return 0;\n");
     printf("}\n");

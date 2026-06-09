@@ -30,6 +30,8 @@ typedef enum {
     // Relacionais
     T_GT,
     T_LT,
+    T_GTE,
+    T_LTE,
     T_EQ,
     T_NEQ,
 

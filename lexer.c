@@ -25,6 +25,8 @@ char* tokenToString(TokenType type) {
 
         case T_GT: return "GT";
         case T_LT: return "LT";
+        case T_GTE: return "GTE"; 
+        case T_LTE: return "LTE"; 
         case T_EQ: return "EQ";
         case T_NEQ: return "NEQ";
     
@@ -182,9 +184,27 @@ Token nextToken()
         case '*': token.type = T_MUL; strcpy(token.lexeme, "*"); break;
         case '/': token.type = T_DIV; strcpy(token.lexeme, "/"); break;
         case ':': token.type = T_COLON; strcpy(token.lexeme, ":"); break;
-        case '>': token.type = T_GT; strcpy(token.lexeme, ">"); break;
-        case '<': token.type = T_LT; strcpy(token.lexeme, "<"); break;
+        case '>':
+            if (input[pos + 1] == '=') {
+                token.type = T_GTE; // Se você tiver o token maior-ou-igual no enum
+                strcpy(token.lexeme, ">=");
+                pos++; // Consome o '='
+            } else {
+                token.type = T_GT;
+                strcpy(token.lexeme, ">");
+            }
+            break;
 
+        case '<':
+            if (input[pos + 1] == '=') {
+                token.type = T_LTE; // Se você tiver o token menor-ou-igual no enum
+                strcpy(token.lexeme, "<=");
+                pos++; // Consome o '='
+            } else {
+                token.type = T_LT;
+                strcpy(token.lexeme, "<");
+            }
+            break;
         case '=':
             if(input[pos + 1] == '=') {
                 token.type = T_EQ;

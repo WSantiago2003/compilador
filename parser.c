@@ -14,6 +14,16 @@ char* newLabel() {
     return label;
 }
 
+void printTacAsComment(AST* node, int indent) {
+    if (!node) return;
+
+    int oldTacPrint = tacPrint;
+    tacPrint = 0; 
+
+    char* tacResult = generateTAC(node);
+    tacPrint = oldTacPrint;
+}
+
 // Pilha para armazenar os saltos de break e continue
 char loopStartStack[50][10];
 char loopEndStack[50][10];
@@ -125,17 +135,43 @@ char* generateTAC(AST* node) {
         char* lElse = newLabel();
         char* lEnd = newLabel();
 
-        // Se a condição for falsa, pula pro Else (ou pro Fim)
-        if (tacPrint) printf("ifFalse %s goto %s;\n", cond, node->control.elseBranch ? lElse : lEnd);
+        // 1. Desvio condicional inicial
+        if (tacPrint == 1) {
+            printf("ifFalse %s goto %s;\n", cond, node->control.elseBranch ? lElse : lEnd);
+        } else if (tacPrint == 2) { 
+            printf("    if (!%s) goto %s;\n", cond, node->control.elseBranch ? lElse : lEnd);
+        }
         
+        // 2. Corpo do THEN
         generateTAC(node->control.thenBranch);
         
+        // 3. Tratamento do ELSE (se houver)
         if (node->control.elseBranch) {
-            if (tacPrint) printf("goto %s;\n", lEnd); // Terminou o IF, pula o Else
-            if (tacPrint) printf("%s:\n", lElse);     // Começo do Else
+            if (tacPrint == 1) {
+                printf("goto %s;\n", lEnd);
+                printf("%s:\n", lElse);
+            } else if (tacPrint == 2) {
+                printf("    goto %s;\n", lEnd); // Salta o bloco else se o then já executou
+                printf("    %s:\n", lElse);    // Rótulo do Else indentado
+            }
+            
             generateTAC(node->control.elseBranch);
+        } else {
+            // Se NÃO houver else, o rótulo de escape do ifFalse precisa ser impresso aqui para o modo TAC puro
+            if (tacPrint == 1) {
+                printf("%s:\n", lElse);
+            } else if (tacPrint == 2) {
+                printf("    %s:\n", lElse);
+            }
         }
-        if (tacPrint) printf("%s:\n", lEnd); // Fim do IF
+        
+        // 4. Rótulo de FIM do bloco IF completo
+        if (tacPrint == 1) {
+            printf("%s:\n", lEnd);
+        } else if (tacPrint == 2) {
+            printf("    %s:\n", lEnd); // Rótulo de Fim indentado
+        }
+        
         return NULL;
     }
 
@@ -181,24 +217,53 @@ char* generateTAC(AST* node) {
         char* lInc = newLabel();
         char* lEnd = newLabel();
         
-        if (node->forLoop.init) generateTAC(node->forLoop.init); // Executa a inicialização uma vez
+        // 1. Inicialização do FOR (ex: i = 1)
+        if (node->forLoop.init) generateTAC(node->forLoop.init);
         
-        if (tacPrint) printf("%s:\n", lStart);
+        // 2. Rótulo de início do laço (L0:)
+        if (tacPrint == 1) {
+            printf("%s:\n", lStart);
+        } else if (tacPrint == 2) {
+            printf("    %s:\n", lStart); // Indentado para o código C
+        }
         
+        // 3. Avaliação da condição (ex: i <= 10)
         if (node->forLoop.condition) {
             char* cond = generateTAC(node->forLoop.condition);
-            if (tacPrint) printf("ifFalse %s goto %s;\n", cond, lEnd);
+            if (tacPrint == 1) {
+                printf("ifFalse %s goto %s;\n", cond, lEnd);
+            } else if (tacPrint == 2) {
+                printf("    if (!%s) goto %s;\n", cond, lEnd); 
+            }
         }
 
-        pushLoop(lInc, lEnd); // no for, o continue pula para a etapa de incremento
-        
+        // 4. Execução do corpo do laço
+        pushLoop(lInc, lEnd);
         if (node->forLoop.body) generateTAC(node->forLoop.body);
         
-        if (tacPrint) printf("%s:\n", lInc);
-        if (node->forLoop.increment) generateTAC(node->forLoop.increment);
-        if (tacPrint) printf("goto %s;\n", lStart); // Repete
+        // 5. Rótulo de incremento (L1:)
+        if (tacPrint == 1) {
+            printf("%s:\n", lInc);
+        } else if (tacPrint == 2) {
+            printf("    %s:\n", lInc); // Indentado para o código C
+        }
         
-        if (tacPrint) printf("%s:\n", lEnd);
+        // 6. Execução do incremento (ex: i = i + 1)
+        if (node->forLoop.increment) generateTAC(node->forLoop.increment);
+        
+        // 7. Salto de retorno para o início do laço
+        if (tacPrint == 1) {
+            printf("goto %s;\n", lStart);
+        } else if (tacPrint == 2) {
+            printf("    goto %s;\n", lStart); 
+        }
+        
+        // 8. Rótulo de fim do laço (L2:)
+        if (tacPrint == 1) {
+            printf("%s:\n", lEnd);
+        } else if (tacPrint == 2) {
+            printf("    %s:\n", lEnd); // Indentado para o código C
+        }
         
         popLoop();
         return NULL;
@@ -283,7 +348,21 @@ char* generateTAC(AST* node) {
 
     if (node->type == NODE_PRINT) {
         char* expr = generateTAC(node->printStmt.expr);
-        if (tacPrint) printf("print %s;\n", expr);
+        
+        if (tacPrint == 1) {
+            printf("print %s;\n", expr);
+        } else if (tacPrint == 2) {
+            // Pega o índice numérico do temporário (ex: de "t0" extrai o 0)
+            int num = atoi(expr + 1); 
+            DataType type = getTempType(num);
+
+            // Se for char, usa %c, senão usa %d
+            if (type == TYPE_CHAR) {
+                printf("    printf(\"%%c\\n\", %s);\n", expr);
+            } else {
+                printf("    printf(\"%%d\\n\", %s);\n", expr);
+            }
+        }
         return NULL;
     }
 
@@ -331,69 +410,83 @@ char* generateTAC(AST* node) {
     }
 
     if (node->type == NODE_BINOP) {
-    DataType leftType = getNodeType(node->binop.left);
-    DataType rightType = getNodeType(node->binop.right);
+        DataType leftType = getNodeType(node->binop.left);
+        DataType rightType = getNodeType(node->binop.right);
 
-    char* left = generateTAC(node->binop.left);
-    char* right = generateTAC(node->binop.right);
+        char* left = generateTAC(node->binop.left);
+        char* right = generateTAC(node->binop.right);
 
-    // conversão implícita: int -> float
-    if (leftType == TYPE_INT && rightType == TYPE_FLOAT) {
-        char* castTemp = newTemp();
-        int castNum = atoi(castTemp + 1);
+        // conversão implícita: int -> float (Lado Esquerdo)
+        if (leftType == TYPE_INT && rightType == TYPE_FLOAT) {
+            char* castTemp = newTemp();
+            int castNum = atoi(castTemp + 1);
 
-        tempTypes[castNum] = TYPE_FLOAT;
+            tempTypes[castNum] = TYPE_FLOAT;
 
-        if (tacPrint)
-            printf("%s = (float) %s;\n", castTemp, left);
+            if (tacPrint == 1) {
+                printf("%s = (float) %s;\n", castTemp, left);
+            } else if (tacPrint == 2) {
+                printf("    %s = (float) %s;\n", castTemp, left); // Formato C indentado
+            }
 
-        left = castTemp;
+            left = castTemp;
+        }
+
+        // conversão implícita: float -> int (Lado Direito)
+        if (leftType == TYPE_FLOAT && rightType == TYPE_INT) {
+            char* castTemp = newTemp();
+            int castNum = atoi(castTemp + 1);
+
+            tempTypes[castNum] = TYPE_FLOAT;
+
+            if (tacPrint == 1) {
+                printf("%s = (float) %s;\n", castTemp, right);
+            } else if (tacPrint == 2) {
+                printf("    %s = (float) %s;\n", castTemp, right); // Formato C indentado
+            }
+
+            right = castTemp;
+        }
+
+        char* temp = newTemp();
+        int num = atoi(temp + 1);
+
+        char op[5];
+
+        switch (node->binop.op) {
+            case T_PLUS:  strcpy(op, "+"); break;
+            case T_MINUS: strcpy(op, "-"); break;
+            case T_MUL:   strcpy(op, "*"); break;
+            case T_DIV:   strcpy(op, "/"); break;
+            case T_GT:    strcpy(op, ">"); break;
+            case T_LT:    strcpy(op, "<"); break;
+            case T_GTE:   strcpy(op, ">="); break; 
+            case T_LTE:   strcpy(op, "<="); break; 
+            case T_EQ:    strcpy(op, "=="); break;
+            case T_NEQ:   strcpy(op, "!="); break;
+            case T_AND:   strcpy(op, "&&"); break;
+            case T_OR:    strcpy(op, "||"); break;
+            default:      strcpy(op, "?"); break;
+        }
+
+        if (node->binop.op == T_GT || node->binop.op == T_LT ||
+            node->binop.op == T_GTE || node->binop.op == T_LTE ||
+            node->binop.op == T_EQ || node->binop.op == T_NEQ ||
+            node->binop.op == T_AND || node->binop.op == T_OR) {
+            tempTypes[num] = TYPE_INT;
+        } else {
+            tempTypes[num] = getNodeType(node);
+        }
+
+        // --- PRINT FINAL DA OPERAÇÃO BINÁRIA ---
+        if (tacPrint == 1) {
+            printf("%s = %s %s %s;\n", temp, left, op, right);
+        } else if (tacPrint == 2) {
+            printf("    %s = %s %s %s;\n", temp, left, op, right); // Formato C indentado
+        }
+
+        return temp;
     }
-
-    if (leftType == TYPE_FLOAT && rightType == TYPE_INT) {
-        char* castTemp = newTemp();
-        int castNum = atoi(castTemp + 1);
-
-        tempTypes[castNum] = TYPE_FLOAT;
-
-        if (tacPrint)
-            printf("%s = (float) %s;\n", castTemp, right);
-
-        right = castTemp;
-    }
-
-    char* temp = newTemp();
-    int num = atoi(temp + 1);
-
-    char op[5];
-
-    switch (node->binop.op) {
-        case T_PLUS:  strcpy(op, "+"); break;
-        case T_MINUS: strcpy(op, "-"); break;
-        case T_MUL:   strcpy(op, "*"); break;
-        case T_DIV:   strcpy(op, "/"); break;
-        case T_GT:    strcpy(op, ">"); break;
-        case T_LT:    strcpy(op, "<"); break;
-        case T_EQ:    strcpy(op, "=="); break;
-        case T_NEQ:   strcpy(op, "!="); break;
-        case T_AND:   strcpy(op, "&&"); break;
-        case T_OR:    strcpy(op, "||"); break;
-        default:      strcpy(op, "?"); break;
-    }
-
-    if (node->binop.op == T_GT || node->binop.op == T_LT ||
-        node->binop.op == T_EQ || node->binop.op == T_NEQ ||
-        node->binop.op == T_AND || node->binop.op == T_OR) {
-        tempTypes[num] = TYPE_INT;
-    } else {
-        tempTypes[num] = getNodeType(node);
-    }
-
-    if (tacPrint)
-        printf("%s = %s %s %s;\n", temp, left, op, right);
-
-    return temp;
-}
 
     if (node->type == NODE_ASSIGN) {
         char* varTemp = getVarTemp(node->assign.varName);
@@ -405,8 +498,11 @@ char* generateTAC(AST* node) {
         if (value->type == NODE_INT) {
             tempTypes[varNum] = TYPE_INT;
 
-            if (tacPrint)
+            if (tacPrint == 1) {
                 printf("%s = %d;\n", varTemp, value->intValue);
+            } else if (tacPrint == 2) {
+                printf("    %s = %d;\n", varTemp, value->intValue); // Formato C indentado
+            }
 
             return NULL;
         }
@@ -414,8 +510,11 @@ char* generateTAC(AST* node) {
         if (value->type == NODE_FLOAT) {
             tempTypes[varNum] = TYPE_FLOAT;
 
-            if (tacPrint)
+            if (tacPrint == 1) {
                 printf("%s = %.1f;\n", varTemp, value->floatValue);
+            } else if (tacPrint == 2) {
+                printf("    %s = %.1f;\n", varTemp, value->floatValue); // Formato C indentado
+            }
 
             return NULL;
         }
@@ -423,8 +522,11 @@ char* generateTAC(AST* node) {
         if (value->type == NODE_CHAR) {
             tempTypes[varNum] = TYPE_CHAR;
 
-            if (tacPrint)
+            if (tacPrint == 1) {
                 printf("%s = '%c';\n", varTemp, value->charValue);
+            } else if (tacPrint == 2) {
+                printf("    %s = '%c';\n", varTemp, value->charValue); // Formato C indentado
+            }
 
             return NULL;
         }
@@ -432,8 +534,11 @@ char* generateTAC(AST* node) {
         if (value->type == NODE_BOOL) {
             tempTypes[varNum] = TYPE_INT;
 
-            if (tacPrint)
+            if (tacPrint == 1) {
                 printf("%s = %d;\n", varTemp, value->boolValue);
+            } else if (tacPrint == 2) {
+                printf("    %s = %d;\n", varTemp, value->boolValue); // Formato C indentado
+            }
 
             return NULL;
         }
@@ -441,12 +546,11 @@ char* generateTAC(AST* node) {
         // expressão composta: gera temporários normalmente
         char* val = generateTAC(value);
 
-        //char* tempAssign = newTemp();
-        //int num = atoi(tempAssign + 1);
-        //tempTypes[num] = TYPE_INT;
-
-        if (tacPrint)
+        if (tacPrint == 1) {
             printf("%s = %s;\n", varTemp, val);
+        } else if (tacPrint == 2) {
+            printf("    %s = %s;\n", varTemp, val); // Formato C indentado
+        }
 
         return NULL;
     }
@@ -873,7 +977,8 @@ AST* parseRelational() {
     AST* node = parseExpression();
 
     while (currentToken.type == T_GT || currentToken.type == T_LT ||
-           currentToken.type == T_EQ || currentToken.type == T_NEQ) {
+            currentToken.type == T_GTE || currentToken.type == T_LTE ||
+            currentToken.type == T_EQ || currentToken.type == T_NEQ) {
 
         TokenType op = currentToken.type;
         advance();
@@ -1238,13 +1343,12 @@ AST* parseStatement() {
 }
 
     if (currentToken.type == T_WHILE) {
-        advance();
-        advance(); 
+        advance(); // pula T_WHILE
+        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
+        advance(); // pula '('
         AST* cond = parseLogical();
-        advance();
-        
-        if (currentToken.type != T_LBRACE) { printf("Erro: esperado '{'\n"); exit(1); }
-        advance();
+        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
+        advance(); // pula ')'
         
         AST* body = parseBlock();
         
@@ -1288,7 +1392,7 @@ AST* parseBlock() {
     }
 
     currentScope--;                  // Volta para o escopo anterior
-    //varCount = variablesBeforeBlock; // Remove as variáveis locais da memória (Pilha)
+    varCount = variablesBeforeBlock; // Remove as variáveis locais da memória (Pilha)
 
     return node;
 }
@@ -1403,10 +1507,14 @@ float evaluate(AST* node) {
     }
 
     //percorre o bloco
-    if (node->type == 7 || node->type == NODE_BLOCK) {
+    if (node->type == NODE_BLOCK) {
+        int variablesBeforeBlock = varCount; // Salva o estado antes do bloco
         float res = 0;
         for (int i = 0; i < node->block.count; i++) {
             res = evaluate(node->block.children[i]);
+        }
+        if (currentScope > 0) {
+            varCount = variablesBeforeBlock; 
         }
         return res;
     }
@@ -1421,45 +1529,53 @@ float evaluate(AST* node) {
 
     // atribuição
     if (node->type == NODE_ASSIGN) {
-    // 1. Avalia o lado direito
-    float val = evaluate(node->assign.value);
+        // 1. Procura a variável na tabela de símbolos primeiro
+        int pos = findVar(node->assign.varName);
 
-    // 2. Procura variável 
-    int pos = findVar(node->assign.varName);
+        if (pos == -1) {
+            printf("Erro Semantico: Variavel '%s' nao declarada!\n", node->assign.varName);
+            exit(1);
+        }
 
-    if (pos == -1) {
-        printf("Erro: Variavel '%s' nao declarada!\n", node->assign.varName);
-        exit(1);
+        // --- TRAVA DE SEGURANÇA SEMÂNTICA (CHECA INCOMPATIBILIDADE) ---
+        // Se a variável for CHAR, mas o valor que estão tentando atribuir for uma STRING literal
+        if (symbolTable[pos].type == TYPE_CHAR && node->assign.value->type == NODE_STRING) {
+            printf("Erro Semantico: Incompatibilidade de tipos! Nao se pode atribuir uma STRING (Texto) a uma variavel CHAR.\n");
+            exit(1);
+        }
+        // --------------------------------------------------------------
+
+        // 2. Se passou na checagem, avalia o lado direito com segurança
+        float val = evaluate(node->assign.value);
+
+        // 3. Atribuição com conversão por tipo
+        if (symbolTable[pos].type == TYPE_INT) {
+            symbolTable[pos].value.i = (int)val;
+            /*printf("LOG: INT %s = %d\n",
+                symbolTable[pos].name,
+                symbolTable[pos].value.i);*/
+
+        } else if (symbolTable[pos].type == TYPE_FLOAT) {
+            symbolTable[pos].value.f = (float) val;
+            /*printf("LOG: FLOAT %s = %.2f\n",
+                symbolTable[pos].name,
+                symbolTable[pos].value.f);*/
+
+        } else if (symbolTable[pos].type == TYPE_BOOL) {
+            symbolTable[pos].value.i = (val != 0);
+            /*printf("LOG: BOOL %s = %d\n",
+                symbolTable[pos].name,
+                symbolTable[pos].value.i);*/
+
+        } else if (symbolTable[pos].type == TYPE_CHAR) {
+            symbolTable[pos].value.c = (char)val;
+            /*printf("LOG: CHAR %s = %c\n",
+                symbolTable[pos].name,
+                symbolTable[pos].value.c);*/
+        }
+
+        return val;
     }
-
-    // 3. Atribuição com conversão por tipo
-    if (symbolTable[pos].type == TYPE_INT) {
-        symbolTable[pos].value.i = (int)val;
-        /*printf("LOG: INT %s = %d\n",
-            symbolTable[pos].name,
-            symbolTable[pos].value.i);*/
-
-    } else if (symbolTable[pos].type == TYPE_FLOAT) {
-        symbolTable[pos].value.f = (float) val;
-        /*printf("LOG: FLOAT %s = %.2f\n",
-            symbolTable[pos].name,
-            symbolTable[pos].value.f);*/
-
-    } else if (symbolTable[pos].type == TYPE_BOOL) {
-        symbolTable[pos].value.i = (val != 0);
-        /*printf("LOG: BOOL %s = %d\n",
-            symbolTable[pos].name,
-            symbolTable[pos].value.i);*/
-
-    } else if (symbolTable[pos].type == TYPE_CHAR) {
-        symbolTable[pos].value.c = (char)val;
-        /*printf("LOG: CHAR %s = %c\n",
-            symbolTable[pos].name,
-            symbolTable[pos].value.c);*/
-    }
-
-    return val;
-}
 
     // número inteiro
     if (node->type == NODE_INT) {
@@ -1497,6 +1613,12 @@ float evaluate(AST* node) {
 
     // operação binária
     if (node->type == NODE_BINOP) {
+
+        if (node->binop.left->type == NODE_STRING || node->binop.right->type == NODE_STRING) {
+            printf("Erro Semantico: Operacao invalida! Nao e possivel realizar operacoes aritmeticas ou relacionais com STRINGS (Texto).\n");
+            exit(1);
+        }
+
         float left = evaluate(node->binop.left);
         float right = evaluate(node->binop.right);
 
@@ -1507,6 +1629,8 @@ float evaluate(AST* node) {
             case T_DIV: return left / right;
             case T_GT: return left > right;
             case T_LT: return left < right;
+            case T_GTE: return left >= right;
+            case T_LTE: return left <= right;
             case T_EQ: return left == right;
             case T_NEQ: return left != right;
             case T_AND: return (left != 0 && right != 0);
@@ -1635,6 +1759,8 @@ void generateC_expr(AST* node) {
                 case T_DIV:   printf(" / "); break;
                 case T_GT:    printf(" > "); break;
                 case T_LT:    printf(" < "); break;
+                case T_GTE:   printf(" >= "); break; 
+                case T_LTE:   printf(" <= "); break;
                 case T_EQ:    printf(" == "); break;
                 case T_NEQ:   printf(" != "); break;
                 case T_AND:   printf(" && "); break;
@@ -1667,7 +1793,7 @@ void generateC_expr(AST* node) {
 
 // Gera o código C para Statements (Declarações, Blocos, If, While)
 void generateC(AST* node, int indent) {
-    if (!node) return;
+    if (node == NULL) return;
 
     switch(node->type) {
         case NODE_BLOCK:
@@ -1679,12 +1805,12 @@ void generateC(AST* node, int indent) {
         case NODE_DECL:
             printIndent(indent);
             switch(node->decl.type) {
-                case TYPE_INT:   printf("int "); break;
-                case TYPE_FLOAT: printf("float "); break;
-                case TYPE_CHAR:  printf("char "); break;
-                case TYPE_BOOL:  printf("bool "); break;
+                case TYPE_INT:   printf("int %s;\n", node->decl.varName); break;
+                case TYPE_FLOAT: printf("float %s;\n", node->decl.varName); break;
+                case TYPE_CHAR:  printf("char %s;\n", node->decl.varName); break;
+                case TYPE_BOOL:  printf("bool %s;\n", node->decl.varName); break;
+                default: break;
             }
-            printf("%s;\n", node->decl.varName);
             break;
 
         case NODE_PRINT:
@@ -1713,6 +1839,9 @@ void generateC(AST* node, int indent) {
         
         case NODE_ASSIGN:
             printIndent(indent);
+            printf("// TAC: %s = ...\n", node->assign.varName); 
+            printIndent(indent);
+            
             printf("%s = ", node->assign.varName);
             generateC_expr(node->assign.value);
             printf(";\n");
@@ -1720,23 +1849,22 @@ void generateC(AST* node, int indent) {
 
         case NODE_IF:
             printIndent(indent);
+            printf("// TAC: tX = condicao; ifFalse tX goto L_ELSE;\n");
+            printIndent(indent);
+            
             printf("if (");
             generateC_expr(node->control.condition);
             printf(") {\n");
-            
-            if (node->control.thenBranch) {
-                generateC(node->control.thenBranch, indent + 1);
-            }
-            
+            generateC(node->control.thenBranch, indent + 1);
             printIndent(indent);
-            printf("}\n");
-            
+            printf("}");
             if (node->control.elseBranch) {
-                printIndent(indent);
-                printf("else {\n");
+                printf(" else {\n");
                 generateC(node->control.elseBranch, indent + 1);
                 printIndent(indent);
                 printf("}\n");
+            } else {
+                printf("\n");
             }
             break;
 
@@ -1804,18 +1932,21 @@ void generateC(AST* node, int indent) {
 
         case NODE_FOR:
             printIndent(indent);
+            printf("// --- TAC DO LOOP FOR ---\n");
+            printIndent(indent);
+            printf("// L_START:\n");
+            printIndent(indent);
+            printf("// t_cond = condicao; ifFalse t_cond goto L_END;\n");
+            
+            printIndent(indent);
             printf("for (");
-            // A inicialização gera um statement com ';' e quebra de linha. 
-            // Para ficar na mesma linha do FOR no C, extraímos apenas a expressão se for atribuição.
             if (node->forLoop.init && node->forLoop.init->type == NODE_ASSIGN) {
                 printf("%s = ", node->forLoop.init->assign.varName);
                 generateC_expr(node->forLoop.init->assign.value);
             }
             printf("; ");
-            
             generateC_expr(node->forLoop.condition);
             printf("; ");
-            
             if (node->forLoop.increment && node->forLoop.increment->type == NODE_ASSIGN) {
                 printf("%s = ", node->forLoop.increment->assign.varName);
                 generateC_expr(node->forLoop.increment->assign.value);
@@ -1827,7 +1958,7 @@ void generateC(AST* node, int indent) {
             }
             printIndent(indent);
             printf("}\n");
-            break;    
+            break; 
 
         // Se expressões soltas acabarem dentro do bloco (avulsas)
         case NODE_INT:

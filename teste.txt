@@ -1,11 +1,9 @@
-int estoque;
-estoque = 15;
+int a;
+int i;
 
-print("Atualizando inventario...");
-
-
-saida = 2; 
-
-estoque = estoque - saida;
-
-print(estoque);
+a = 1;
+for (i = 1; i <= 10; i = i + 1){
+print(i);
+a = 2;
+}
+a = 3;

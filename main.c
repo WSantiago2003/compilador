@@ -20,8 +20,9 @@ int main(int argc, char *argv[]) {
     fread(input, 1, sizeof(input), f);
     fclose(f);
 
-    printf("Codigo lido:\n%s\n", input);
-    printf("-----------------------------------\n");
+    // COMENTADO PARA NÃO SUJAR O ARQUIVO .C FINAL
+    // printf("Codigo lido:\n%s\n", input);
+    // printf("-----------------------------------\n");
 
     AST* programa = parseProgram();
 
@@ -36,36 +37,26 @@ int main(int argc, char *argv[]) {
     generateTAC(programa);
 
     // Armazena a quantidade total de labels gerados na passada silenciosa
-    int totalLabels = labelCount;
+    //int totalLabels = labelCount;
 
-
-    // --- 2. GERAÇÃO DO CÓDIGO C (BASEADO NO TAC) ---
-    printf("\n=== CODIGO C GERADO ===\n");
+    // --- 2. GERAÇÃO DO CÓDIGO C (BASEADO DO TAC) ---
+    // COMENTADO PARA NÃO SUJAR O ARQUIVO .C FINAL
+    // printf("\n=== CODIGO C GERADO ===\n");
+    
     printf("#include <stdio.h>\n");
-    printf("#include <stdbool.h>\n\n");
+    printf("#include <stdbool.h>\n");
+    printf("#include <string.h>\n\n"); 
     printf("int main() {\n");
     
+    // Isso aqui é comentário DENTRO do código C gerado, então tá liberado!
     printf("    // Variaveis Temporarias do TAC\n");
     for (int i = 0; i < varCount + totalTemps; i++) {
         DataType type = getTempType(i);
         if (type == TYPE_FLOAT) printf("    float t%d;\n", i);
         else if (type == TYPE_CHAR) printf("    char t%d;\n", i);
+        else if (type == TYPE_STRING) printf("    char t%d[255];\n", i);
         else printf("    int t%d;\n", i);
     }
-
-    // --- DECLARAÇÃO DOS LABELS NO TOPO DA MAIN DO C ---
-    if (totalLabels > 0) {
-        printf("\n    // Declaracao dos Labels do TAC\n");
-        printf("    __label__ ");
-        for (int i = 0; i < totalLabels; i++) {
-            printf("L%d", i);
-            if (i < totalLabels - 1) {
-                printf(", ");
-            }
-        }
-        printf(";\n");
-    }
-    printf("\n");
 
     // Configura para o Modo 2 (Gera o TAC convertido na sintaxe do C)
     tacPrint = 2; 

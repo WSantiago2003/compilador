@@ -220,8 +220,10 @@ Token nextToken()
             if (input[pos+1] == '=') {
                 pos++;
                 token.type = T_NEQ;
+                strcpy(token.lexeme, "!=");
             } else {
                 token.type = T_NOT;
+                strcpy(token.lexeme, "!");
             }
             break;
 

@@ -6,6 +6,7 @@
 int tacPrint = 1;
 int varCount = 0;
 int currentScope = 0;
+int varNum = 0;
 // Gerador de Labels (L0, L1, L2...)
 int labelCount = 0;
 char* newLabel() {
@@ -20,7 +21,7 @@ void printTacAsComment(AST* node, int indent) {
     int oldTacPrint = tacPrint;
     tacPrint = 0; 
 
-    char* tacResult = generateTAC(node);
+    generateTAC(node);
     tacPrint = oldTacPrint;
 }
 
@@ -56,20 +57,17 @@ char* newTemp() {
     return temp;
 }
 
-char* getVarTemp(char* name) {
-    int pos = findVar(name);
-
-    if (pos == -1) {
-        printf("Erro: variavel %s nao declarada\n", name);
-        exit(1);
-    }
-
+char* getVarTempByIndex(int index) {
     char* temp = malloc(10);
-    sprintf(temp, "t%d", pos);
+    sprintf(temp, "t%d", index);
     return temp;
 }
 
 DataType getNodeType(AST* node) {
+
+    if (node->type == NODE_VAR) {
+        return symbolTable[node->symbolIndex].type; // Busca direta e sem erro!
+    }
 
     if (node->type == NODE_STRING) {
         return TYPE_STRING;
@@ -347,18 +345,26 @@ char* generateTAC(AST* node) {
     }
 
     if (node->type == NODE_PRINT) {
+        // Checagem se o nó for um texto literal diretamente
+        if (node->printStmt.expr->type == NODE_STRING) {
+            char* expr = generateTAC(node->printStmt.expr);
+            if (tacPrint == 1) printf("print %s;\n", expr);
+            else if (tacPrint == 2) printf("    printf(\"%%s\\n\", %s);\n", expr);
+            return NULL;
+        }
+
         char* expr = generateTAC(node->printStmt.expr);
         
         if (tacPrint == 1) {
             printf("print %s;\n", expr);
         } else if (tacPrint == 2) {
-            // Pega o índice numérico do temporário (ex: de "t0" extrai o 0)
             int num = atoi(expr + 1); 
             DataType type = getTempType(num);
 
-            // Se for char, usa %c, senão usa %d
             if (type == TYPE_CHAR) {
                 printf("    printf(\"%%c\\n\", %s);\n", expr);
+            } else if (type == TYPE_STRING) {
+                printf("    printf(\"%%s\\n\", %s);\n", expr); // Imprime a string!
             } else {
                 printf("    printf(\"%%d\\n\", %s);\n", expr);
             }
@@ -367,8 +373,23 @@ char* generateTAC(AST* node) {
     }
 
     if (node->type == NODE_READ) {
-        char* varTemp = getVarTemp(node->readStmt.varName);
-        if (tacPrint) printf("read %s;\n", varTemp);
+        char* varTemp = getVarTempByIndex(node->symbolIndex);
+        
+        if (tacPrint == 1) {
+            printf("read %s;\n", varTemp);
+        } else if (tacPrint == 2) {
+            DataType t = symbolTable[node->symbolIndex].type;
+            if (t == TYPE_STRING) {
+                // Lê strings, inclusive com espaços
+                printf("    scanf(\" %%254[^\\n]\", %s);\n", varTemp); 
+            } else if (t == TYPE_CHAR) {
+                printf("    scanf(\" %%c\", &%s);\n", varTemp);
+            } else if (t == TYPE_FLOAT) {
+                printf("    scanf(\"%%f\", &%s);\n", varTemp);
+            } else {
+                printf("    scanf(\"%%d\", &%s);\n", varTemp);
+            }
+        }
         return NULL;
     }
 
@@ -395,7 +416,7 @@ char* generateTAC(AST* node) {
     }
 
     if (node->type == NODE_VAR) {
-        return getVarTemp(node->varName);
+        return getVarTempByIndex(node->symbolIndex);
     }
 
     if (node->type == NODE_UNOP) {
@@ -489,11 +510,19 @@ char* generateTAC(AST* node) {
     }
 
     if (node->type == NODE_ASSIGN) {
-        char* varTemp = getVarTemp(node->assign.varName);
+        char* varTemp = getVarTempByIndex(node->symbolIndex);
         AST* value = node->assign.value;
 
-        int varNum = atoi(varTemp + 1);
-
+        // NOVO: TRATAMENTO DE STRINGS (Atribui usando strcpy)
+        if (symbolTable[node->symbolIndex].type == TYPE_STRING) {
+            char* val = generateTAC(value);
+            if (tacPrint == 1) {
+                printf("%s = %s;\n", varTemp, val);
+            } else if (tacPrint == 2) {
+                printf("    strcpy(%s, %s);\n", varTemp, val); // Código C seguro!
+            }
+            return NULL;
+        }
         // atribuição simples: NÃO cria temporário extra
         if (value->type == NODE_INT) {
             tempTypes[varNum] = TYPE_INT;
@@ -556,7 +585,7 @@ char* generateTAC(AST* node) {
     }
 
     if (node->type == NODE_DECL) {
-        return NULL;
+        return 0;
     }
 
     if (node->type == NODE_CAST) {
@@ -759,6 +788,12 @@ AST* createVarNode(char* name) {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_VAR;
     strcpy(node->varName, name);
+    
+    node->symbolIndex = findVar(name); // Resolve qual é o "x" correto agora
+    if (node->symbolIndex == -1) {
+        printf("Erro Semantico: Variavel '%s' nao declarada!\n", name);
+        exit(1);
+    }
     return node;
 }
 
@@ -767,23 +802,31 @@ AST* createAssignNode(char* name, AST* value) {
     node->type = NODE_ASSIGN;
     strcpy(node->assign.varName, name);
     node->assign.value = value;
+    
+    node->symbolIndex = findVar(name);
+    if (node->symbolIndex == -1) {
+        printf("Erro Semantico: Variavel '%s' nao declarada na atribuicao!\n", name);
+        exit(1);
+    }
     return node;
 }
 
 int findVar(char* name) {
     // Busca de trás para frente (prioriza o escopo mais interno)
     for (int i = varCount - 1; i >= 0; i--) {
-        if (strcmp(symbolTable[i].name, name) == 0) {
+        // Só considera a variável se ela estiver ativa
+        if (symbolTable[i].isActive && strcmp(symbolTable[i].name, name) == 0) {
             return i;
         }
     }
-    return -1; // Não encontrou em nenhum escopo
+    return -1; // Não encontrou em nenhum escopo visível
 }
 
-void addSymbol(char* name, DataType type) {
+int addSymbol(char* name, DataType type) {
     // Verifica se a variável já existe NO MESMO ESCOPO
     for (int i = varCount - 1; i >= 0; i--) {
-        if (symbolTable[i].scope < currentScope) break; // Saiu do escopo atual, pode parar de procurar
+        if (!symbolTable[i].isActive) continue; // Ignora variáveis de blocos já fechados
+        if (symbolTable[i].scope < currentScope) break; // Saiu do escopo atual, pode parar
         
         if (strcmp(symbolTable[i].name, name) == 0) {
             printf("Erro: Variavel '%s' ja declarada neste escopo!\n", name);
@@ -794,14 +837,17 @@ void addSymbol(char* name, DataType type) {
     if (varCount < MAX_VARS) {
         strcpy(symbolTable[varCount].name, name);
         symbolTable[varCount].type = type;
-        symbolTable[varCount].scope = currentScope; // Salva o escopo atual
+        symbolTable[varCount].scope = currentScope;
+        symbolTable[varCount].isActive = 1; // Marca como ativa
         
         // Inicializa com zero
         if (type == TYPE_INT) symbolTable[varCount].value.i = 0;
         else if (type == TYPE_FLOAT) symbolTable[varCount].value.f = 0.0;
         else if (type == TYPE_CHAR) symbolTable[varCount].value.c = '\0';
+        else if (type == TYPE_STRING) strcpy(symbolTable[varCount].value.s, "");
         
         varCount++;
+        return varCount - 1; // Retorna o ID do TAC que acabou de ser criado
     } else {
         printf("Erro: Tabela de simbolos cheia!\n");
         exit(1);
@@ -822,6 +868,9 @@ AST* createDeclNode(char* name, DataType type) {
     node->type = NODE_DECL;
     strcpy(node->decl.varName, name);
     node->decl.type = type;
+    
+    // Adiciona e já salva o índice na AST!
+    node->symbolIndex = addSymbol(name, type);
     return node;
 }
 
@@ -1272,14 +1321,16 @@ AST* parseStatement() {
     if (currentToken.type == T_INT_TYPE ||
         currentToken.type == T_FLOAT_TYPE ||
         currentToken.type == T_BOOL_TYPE ||
-        currentToken.type == T_CHAR_TYPE) {
+        currentToken.type == T_CHAR_TYPE ||
+        currentToken.type == T_STRING_TYPE) {
 
         DataType type;
 
         if (currentToken.type == T_INT_TYPE) type = TYPE_INT;
         else if (currentToken.type == T_FLOAT_TYPE) type = TYPE_FLOAT;
         else if (currentToken.type == T_BOOL_TYPE) type = TYPE_BOOL;
-        else type = TYPE_CHAR;
+        else if (currentToken.type == T_CHAR_TYPE) type = TYPE_CHAR;
+        else type = TYPE_STRING;
 
         advance();
 
@@ -1373,8 +1424,7 @@ AST* parseBlock() {
     node->type = NODE_BLOCK;
     node->block.count = 0;
 
-    int variablesBeforeBlock = varCount; // Salva o estado da tabela antes do bloco
-    currentScope++;                      // Entra em um novo escopo (Contexto Local)
+    currentScope++; // Entra em um novo escopo
 
     while (currentToken.type != T_RBRACE && currentToken.type != T_EOF) {
         if (currentToken.type == T_SEMICOLON) {
@@ -1391,9 +1441,14 @@ AST* parseBlock() {
         exit(1);
     }
 
-    currentScope--;                  // Volta para o escopo anterior
-    varCount = variablesBeforeBlock; // Remove as variáveis locais da memória (Pilha)
-
+    // Desativa as variáveis DESTE escopo
+    for (int i = 0; i < varCount; i++) {
+        if (symbolTable[i].scope == currentScope) {
+            symbolTable[i].isActive = 0; // Fica invisível para os blocos de fora
+        }
+    }
+    
+    currentScope--; // Volta para o escopo anterior
     return node;
 }
 
@@ -1474,6 +1529,12 @@ AST* createReadNode(char* varName) {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_READ;
     strcpy(node->readStmt.varName, varName);
+    
+    node->symbolIndex = findVar(varName);
+    if (node->symbolIndex == -1) {
+        printf("Erro: Variavel '%s' nao declarada na leitura!\n", varName);
+        exit(1);
+    }
     return node;
 }
 
@@ -1497,26 +1558,16 @@ float evaluate(AST* node) {
     }
 
     if (node->type == NODE_DECL) {
-        if (findVar(node->decl.varName) != -1) {
-            printf("Erro: variável já declarada\n");
-            exit(1);
-        }
-
-        addSymbol(node->decl.varName, node->decl.type);
         return 0;
     }
 
     //percorre o bloco
     if (node->type == NODE_BLOCK) {
-        int variablesBeforeBlock = varCount; // Salva o estado antes do bloco
         float res = 0;
         for (int i = 0; i < node->block.count; i++) {
             res = evaluate(node->block.children[i]);
         }
-        if (currentScope > 0) {
-            varCount = variablesBeforeBlock; 
-        }
-        return res;
+        return res; // Não precisa mais mexer em escopo aqui
     }
 
     //if
@@ -1529,50 +1580,24 @@ float evaluate(AST* node) {
 
     // atribuição
     if (node->type == NODE_ASSIGN) {
-        // 1. Procura a variável na tabela de símbolos primeiro
-        int pos = findVar(node->assign.varName);
+        int pos = node->symbolIndex; 
 
-        if (pos == -1) {
-            printf("Erro Semantico: Variavel '%s' nao declarada!\n", node->assign.varName);
-            exit(1);
+        if (symbolTable[pos].type == TYPE_STRING) {
+             return 0; // O código C real gerado fará a cópia
         }
 
-        // --- TRAVA DE SEGURANÇA SEMÂNTICA (CHECA INCOMPATIBILIDADE) ---
-        // Se a variável for CHAR, mas o valor que estão tentando atribuir for uma STRING literal
+        // Checagem Semântica (Incompatibilidade)
         if (symbolTable[pos].type == TYPE_CHAR && node->assign.value->type == NODE_STRING) {
             printf("Erro Semantico: Incompatibilidade de tipos! Nao se pode atribuir uma STRING (Texto) a uma variavel CHAR.\n");
             exit(1);
         }
-        // --------------------------------------------------------------
 
-        // 2. Se passou na checagem, avalia o lado direito com segurança
         float val = evaluate(node->assign.value);
 
-        // 3. Atribuição com conversão por tipo
-        if (symbolTable[pos].type == TYPE_INT) {
-            symbolTable[pos].value.i = (int)val;
-            /*printf("LOG: INT %s = %d\n",
-                symbolTable[pos].name,
-                symbolTable[pos].value.i);*/
-
-        } else if (symbolTable[pos].type == TYPE_FLOAT) {
-            symbolTable[pos].value.f = (float) val;
-            /*printf("LOG: FLOAT %s = %.2f\n",
-                symbolTable[pos].name,
-                symbolTable[pos].value.f);*/
-
-        } else if (symbolTable[pos].type == TYPE_BOOL) {
-            symbolTable[pos].value.i = (val != 0);
-            /*printf("LOG: BOOL %s = %d\n",
-                symbolTable[pos].name,
-                symbolTable[pos].value.i);*/
-
-        } else if (symbolTable[pos].type == TYPE_CHAR) {
-            symbolTable[pos].value.c = (char)val;
-            /*printf("LOG: CHAR %s = %c\n",
-                symbolTable[pos].name,
-                symbolTable[pos].value.c);*/
-        }
+        if (symbolTable[pos].type == TYPE_INT) symbolTable[pos].value.i = (int)val;
+        else if (symbolTable[pos].type == TYPE_FLOAT) symbolTable[pos].value.f = (float)val;
+        else if (symbolTable[pos].type == TYPE_BOOL) symbolTable[pos].value.i = (val != 0);
+        else if (symbolTable[pos].type == TYPE_CHAR) symbolTable[pos].value.c = (char)val;
 
         return val;
     }
@@ -1656,16 +1681,12 @@ float evaluate(AST* node) {
 
     // variável
     if (node->type == NODE_VAR) {
-        int pos = findVar(node->varName);
-        if (pos != -1) {
-            if (symbolTable[pos].type == TYPE_INT) {
-                return (float)symbolTable[pos].value.i;
-            } else {
-                return symbolTable[pos].value.f;
-            }
+        int pos = node->symbolIndex;
+        if (symbolTable[pos].type == TYPE_INT) {
+            return (float)symbolTable[pos].value.i;
+        } else {
+            return symbolTable[pos].value.f;
         }
-        printf("Erro: Variavel %s nao encontrada!\n", node->varName);
-        exit(1);
     }
 
     
@@ -1687,12 +1708,7 @@ float evaluate(AST* node) {
     }
 
     if (node->type == NODE_READ) {
-        int pos = findVar(node->readStmt.varName);
-        if (pos == -1) {
-            printf("Erro: Variavel '%s' nao declarada na leitura!\n", node->readStmt.varName);
-            exit(1);
-        }
-        return 0;
+        return 0; // O erro de não declaração já foi pego no Parser
     }
 
     // --- NOVOS NÓS DE LAÇOS (FOR, DO/WHILE, BREAK, CONTINUE) ---
@@ -1782,6 +1798,7 @@ void generateC_expr(AST* node) {
                 case TYPE_FLOAT: printf("(float)"); break;
                 case TYPE_CHAR:  printf("(char)"); break;
                 case TYPE_BOOL:  printf("(bool)"); break;
+                case TYPE_STRING: break;
             }
             generateC_expr(node->cast.expr);
             printf(")");

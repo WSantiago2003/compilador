@@ -10,10 +10,12 @@ typedef struct {
     char name[50];
     DataType type;
     int scope;
+    int isActive;
     union {
         int i;
         float f;
         char c;
+        char s[255];
     } value;
 } Symbol;
 
@@ -47,6 +49,7 @@ typedef enum {
 // Estrutura da árvore
 typedef struct AST {
     NodeType type;
+    int symbolIndex;
 
     union {
         // Valores Literais
@@ -55,6 +58,7 @@ typedef struct AST {
         char varName[50]; 
         char charValue;
         int boolValue;
+        
 
         // Operações Binárias (+, -, *, /, >, <, etc)
         struct {

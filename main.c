@@ -52,13 +52,17 @@ int main(int argc, char *argv[]) {
     printf("    // Variaveis Temporarias do TAC\n");
     for (int i = 0; i < varCount + totalTemps; i++) {
         DataType type = getTempType(i);
-        if (type == TYPE_FLOAT) printf("    float t%d;\n", i);
-        else if (type == TYPE_CHAR) printf("    char t%d;\n", i);
-        // A MÁGICA ACONTECE AQUI: Declara a string e a sua variável de tamanho!
-        else if (type == TYPE_STRING) {
+        if (type == TYPE_FLOAT) {
+            printf("    float t%d;\n", i);
+        } else if (type == TYPE_CHAR) {
+            printf("    char t%d;\n", i);
+        } else if (type == TYPE_STRING) {
             int size = getStringSize(i);
             printf("    char t%d[%d];\n", i, size);
-            printf("    int t%d_len;\n", i); // Variável que guardará o tamanho
+            printf("    int t%d_len;\n", i);
+        } else {
+            // ESSA É A LINHA QUE TINHA SUMIDO!
+            printf("    int t%d;\n", i);
         }
     }
     // Configura para o Modo 2 (Gera o TAC convertido na sintaxe do C)

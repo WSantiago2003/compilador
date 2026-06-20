@@ -179,10 +179,41 @@ Token nextToken()
 
     // OPERADORES
     switch (c) {
-        case '+': token.type = T_PLUS; strcpy(token.lexeme, "+"); break;
-        case '-': token.type = T_MINUS; strcpy(token.lexeme, "-"); break;
-        case '*': token.type = T_MUL; strcpy(token.lexeme, "*"); break;
-        case '/': token.type = T_DIV; strcpy(token.lexeme, "/"); break;
+        case '+': 
+            if (input[pos + 1] == '+') {
+                token.type = T_INC; strcpy(token.lexeme, "++"); pos++;
+            } else if (input[pos + 1] == '=') {
+                token.type = T_PLUS_ASSIGN; strcpy(token.lexeme, "+="); pos++;
+            } else {
+                token.type = T_PLUS; strcpy(token.lexeme, "+"); 
+            }
+            break;
+            
+        case '-': 
+            if (input[pos + 1] == '-') {
+                token.type = T_DEC; strcpy(token.lexeme, "--"); pos++;
+            } else if (input[pos + 1] == '=') {
+                token.type = T_MINUS_ASSIGN; strcpy(token.lexeme, "-="); pos++;
+            } else {
+                token.type = T_MINUS; strcpy(token.lexeme, "-"); 
+            }
+            break;
+
+        case '*':
+            if (input[pos + 1] == '=') {
+                token.type = T_MUL_ASSIGN; strcpy(token.lexeme, "*="); pos++;
+            } else {
+                token.type = T_MUL; strcpy(token.lexeme, "*");
+            }
+            break;
+
+        case '/':
+            if (input[pos + 1] == '=') {
+                token.type = T_DIV_ASSIGN; strcpy(token.lexeme, "/="); pos++;
+            } else {
+                token.type = T_DIV; strcpy(token.lexeme, "/");
+            }
+            break;
         case ':': token.type = T_COLON; strcpy(token.lexeme, ":"); break;
         case '>':
             if (input[pos + 1] == '=') {

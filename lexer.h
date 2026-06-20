@@ -24,6 +24,8 @@ typedef enum {
     // Operadores aritméticos
     T_PLUS,
     T_MINUS,
+    T_INC, 
+    T_DEC,
     T_MUL,
     T_DIV,
 
@@ -39,9 +41,13 @@ typedef enum {
     T_AND,
     T_OR,
     T_NOT,
-
+    
     // Atribuição
     T_ASSIGN,
+    T_PLUS_ASSIGN, 
+    T_MINUS_ASSIGN, 
+    T_MUL_ASSIGN,   
+    T_DIV_ASSIGN,   
 
     // Palavras-chave (controle)
     T_IF,

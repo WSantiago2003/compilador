@@ -1267,16 +1267,50 @@ AST* parseStatement() {
         if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
         advance();
         
-        // Incremento (Lemos como uma atribuição simples, mas sem o ';' no final)
+        // Incremento (Lemos como uma atribuição simples, unitário ou composto, sem o ';' no final)
         AST* inc = NULL;
         if (currentToken.type == T_ID) {
             char varName[100];
             strcpy(varName, currentToken.lexeme);
             advance();
+            
             if (currentToken.type == T_ASSIGN) {
-                advance();
+                advance(); // pula '='
                 AST* val = parseLogical();
                 inc = createAssignNode(varName, val);
+            } 
+            else if (currentToken.type == T_INC) {
+                advance(); // pula '++'
+                AST* varNode = createVarNode(varName);
+                AST* oneNode = createIntNode(1);
+                AST* addNode = createBinOpNode(T_PLUS, varNode, oneNode);
+                inc = createAssignNode(varName, addNode);
+            } 
+            else if (currentToken.type == T_DEC) {
+                advance(); // pula '--'
+                AST* varNode = createVarNode(varName);
+                AST* oneNode = createIntNode(1);
+                AST* subNode = createBinOpNode(T_MINUS, varNode, oneNode);
+                inc = createAssignNode(varName, subNode);
+            }
+            // NOVO: Operadores compostos no incremento do FOR (ex: i += 2)
+            else if (currentToken.type == T_PLUS_ASSIGN || currentToken.type == T_MINUS_ASSIGN || 
+                     currentToken.type == T_MUL_ASSIGN || currentToken.type == T_DIV_ASSIGN) {
+                
+                TokenType opType;
+                if (currentToken.type == T_PLUS_ASSIGN) opType = T_PLUS;
+                else if (currentToken.type == T_MINUS_ASSIGN) opType = T_MINUS;
+                else if (currentToken.type == T_MUL_ASSIGN) opType = T_MUL;
+                else opType = T_DIV;
+
+                advance(); // pula o operador composto (ex: '+=')
+                
+                AST* valueNode = parseLogical(); // Lê o valor da direita
+                
+                // O TRUQUE: Transforma "i += 2" em "i = i + 2"
+                AST* varNode = createVarNode(varName);
+                AST* binOpNode = createBinOpNode(opType, varNode, valueNode);
+                inc = createAssignNode(varName, binOpNode);
             }
         }
         
@@ -1342,7 +1376,7 @@ AST* parseStatement() {
         advance();
 
         if (currentToken.type != T_ID) {
-            printf("Erro: esperado identificador\n");
+            printf("Erro: esperado identificador na declaracao\n");
             exit(1);
         }
 
@@ -1351,16 +1385,43 @@ AST* parseStatement() {
 
         advance();
 
+        // 1. Cria o nó de declaração (isso já salva a variável na Tabela de Símbolos!)
+        AST* declNode = createDeclNode(name, type);
+
+        // 2. Verifica se o usuário quer inicializar logo de cara (ex: int a = 5;)
+        if (currentToken.type == T_ASSIGN) {
+            advance(); // Consome o '='
+            
+            AST* valueNode = parseLogical(); // Lê o que vem depois do igual
+            
+            if (currentToken.type != T_SEMICOLON) {
+                printf("Erro: esperado ';' apos inicializacao de %s\n", name);
+                exit(1);
+            }
+            advance(); // Consome o ';'
+
+            // Cria o nó de atribuição
+            AST* assignNode = createAssignNode(name, valueNode);
+
+            // Cria um "mini-bloco" disfarçado para retornar os dois comandos juntos
+            AST* blockNode = malloc(sizeof(AST));
+            blockNode->type = NODE_BLOCK;
+            blockNode->block.count = 2;
+            blockNode->block.children[0] = declNode;
+            blockNode->block.children[1] = assignNode;
+
+            return blockNode;
+        }
+
+        // 3. Se for só uma declaração normal sem inicializar (ex: int a;)
         if (currentToken.type != T_SEMICOLON) {
             printf("Erro: esperado ';' apos declaracao de %s\n", name);
             exit(1);
         }
 
-    advance();
+        advance(); // Consome o ';'
 
-    return createDeclNode(name, type);
-
-        return createDeclNode(name, type);
+        return declNode;
     }
 
     // 1. Pular pontos e vírgulas inúteis
@@ -1373,32 +1434,85 @@ AST* parseStatement() {
         return parseIf();
     }
 
-    // 3. Se for um ID, significa que é uma ATRIBUIÇÃO
+    // 3. Se for um ID, significa que é uma ATRIBUIÇÃO ou INCREMENTO/DECREMENTO
+    // 3. Se for um ID, significa que é uma ATRIBUIÇÃO ou INCREMENTO/DECREMENTO/COMPOSTO
     if (currentToken.type == T_ID) {
-    char varName[100];
-    strcpy(varName, currentToken.lexeme);
+        char varName[100];
+        strcpy(varName, currentToken.lexeme);
 
-    advance(); // pula ID
+        advance(); // pula ID
 
-    if (currentToken.type == T_ASSIGN) {
-        advance(); // pula '='
+        // Caso 1: Atribuição normal (a = 5;)
+        if (currentToken.type == T_ASSIGN) {
+            advance(); // pula '='
+            AST* value = parseLogical();
+            if (currentToken.type != T_SEMICOLON) {
+                printf("Erro: esperado ';' apos atribuicao de %s\n", varName);
+                exit(1);
+            }
+            advance(); // consome ;
+            return createAssignNode(varName, value);
+        } 
+        // Caso 2: Incremento (a++;)
+        else if (currentToken.type == T_INC) {
+            advance(); // pula '++'
+            if (currentToken.type != T_SEMICOLON) {
+                printf("Erro: esperado ';' apos '%s++'\n", varName);
+                exit(1);
+            }
+            advance(); // consome ;
+            
+            AST* varNode = createVarNode(varName);
+            AST* oneNode = createIntNode(1);
+            AST* addNode = createBinOpNode(T_PLUS, varNode, oneNode);
+            return createAssignNode(varName, addNode);
+        }
+        // Caso 3: Decremento (a--;)
+        else if (currentToken.type == T_DEC) {
+            advance(); // pula '--'
+            if (currentToken.type != T_SEMICOLON) {
+                printf("Erro: esperado ';' apos '%s--'\n", varName);
+                exit(1);
+            }
+            advance(); // consome ;
+            
+            AST* varNode = createVarNode(varName);
+            AST* oneNode = createIntNode(1);
+            AST* subNode = createBinOpNode(T_MINUS, varNode, oneNode);
+            return createAssignNode(varName, subNode);
+        } 
+        // Caso 4: Operadores Compostos (a += 5, a -= 3, etc)
+        else if (currentToken.type == T_PLUS_ASSIGN || currentToken.type == T_MINUS_ASSIGN || 
+                 currentToken.type == T_MUL_ASSIGN || currentToken.type == T_DIV_ASSIGN) {
+            
+            TokenType opType;
+            if (currentToken.type == T_PLUS_ASSIGN) opType = T_PLUS;
+            else if (currentToken.type == T_MINUS_ASSIGN) opType = T_MINUS;
+            else if (currentToken.type == T_MUL_ASSIGN) opType = T_MUL;
+            else opType = T_DIV;
 
-        AST* value = parseLogical();
-
-        //; necessario
-           if (currentToken.type != T_SEMICOLON) {
-            printf("Erro: esperado ';' apos atribuicao de %s\n", varName);
+            advance(); // pula o operador composto (ex: '+=')
+            
+            AST* valueNode = parseLogical(); // Lê o valor da direita
+            
+            if (currentToken.type != T_SEMICOLON) {
+                printf("Erro: esperado ';' apos operacao composta em '%s'\n", varName);
+                exit(1);
+            }
+            advance(); // consome ;
+            
+            // O TRUQUE: Transforma "a += 5" em "a = a + 5"
+            AST* varNode = createVarNode(varName);
+            AST* binOpNode = createBinOpNode(opType, varNode, valueNode);
+            return createAssignNode(varName, binOpNode);
+        } 
+        // Caso 5: Se não for nada disso, dá erro!
+        else {
+            // Atualizei a mensagem de erro para incluir os novos operadores!
+            printf("Erro: esperado '=', '++', '--', '+=', '-=', '*=' ou '/=' apos o identificador %s\n", varName);
             exit(1);
         }
-
-        advance(); // consome ;
-
-        return createAssignNode(varName, value);
-    } else {
-        printf("Erro: esperado '=' apos o identificador %s\n", varName);
-        exit(1);
     }
-}
 
     if (currentToken.type == T_WHILE) {
         advance(); // pula T_WHILE

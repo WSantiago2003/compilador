@@ -2,13 +2,47 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h> 
+#include <setjmp.h> // NOVO: Para o Panic Mode!
 
 int tacPrint = 1;
 int varCount = 0;
 int currentScope = 0;
 int varNum = 0;
-// Gerador de Labels (L0, L1, L2...)
 int labelCount = 0;
+
+Token currentToken;
+
+// --- VARIÁVEIS DO PANIC MODE ---
+int errorCount = 0;
+jmp_buf panicBuffer;
+
+// --- SISTEMA DE RASTREAMENTO DE ERROS ---
+void syntaxError(const char* format, ...) {
+    printf("\n[!] ERRO DE SINTAXE (Linha %d, Coluna %d): ", currentToken.line, currentToken.column);
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+    printf("\n");
+    
+    errorCount++;
+    longjmp(panicBuffer, 1); // Dispara o teletransporte do Panic Mode!
+}
+
+void semanticError(const char* format, ...) {
+    printf("\n[!] ERRO SEMANTICO (Linha %d, Coluna %d): ", currentToken.line, currentToken.column);
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+    printf("\n");
+    
+    errorCount++;
+    longjmp(panicBuffer, 1); // Dispara o teletransporte do Panic Mode!
+}
+// -------------------------------------------------------
+
 char* newLabel() {
     char* label = malloc(10);
     sprintf(label, "L%d", labelCount++);
@@ -17,15 +51,12 @@ char* newLabel() {
 
 void printTacAsComment(AST* node, int indent) {
     if (!node) return;
-
     int oldTacPrint = tacPrint;
     tacPrint = 0; 
-
     generateTAC(node);
     tacPrint = oldTacPrint;
 }
 
-// Pilha para armazenar os saltos de break e continue
 char loopStartStack[50][10];
 char loopEndStack[50][10];
 int loopDepth = 0;
@@ -39,14 +70,11 @@ void pushLoop(char* start, char* end) {
 void popLoop() {
     if (loopDepth > 0) loopDepth--;
 }
+
 AST* parseLogical();
 int findVar(char* name);
 
 Symbol symbolTable[MAX_VARS];
-
-
-Token currentToken;
-
 int tempCount = 0;
 DataType tempTypes[100];
 
@@ -64,111 +92,58 @@ char* getVarTempByIndex(int index) {
 }
 
 DataType getNodeType(AST* node) {
+    if (node->type == NODE_VAR) return symbolTable[node->symbolIndex].type;
+    if (node->type == NODE_STRING) return TYPE_STRING;
+    if (node->type == NODE_INT) return TYPE_INT;
+    if (node->type == NODE_FLOAT) return TYPE_FLOAT;
+    if (node->type == NODE_ARRAY_ACCESS) return symbolTable[node->symbolIndex].type;
+    if (node->type == NODE_CHAR) return TYPE_CHAR;
+    if (node->type == NODE_BOOL) return TYPE_BOOL;
+    if (node->type == NODE_CAST) return node->cast.type;
 
-    if (node->type == NODE_VAR) {
-        return symbolTable[node->symbolIndex].type; // Busca direta e sem erro!
-    }
-
-    if (node->type == NODE_STRING) {
-        return TYPE_STRING;
-    }
-
-    if (node->type == NODE_INT)
-        return TYPE_INT;
-
-    if (node->type == NODE_FLOAT)
-        return TYPE_FLOAT;
-
-    if (node->type == NODE_VAR) {
-        int pos = findVar(node->varName);
-
-        if (pos == -1) {
-            printf("Erro: variavel nao declarada\n");
-            exit(1);
-        }
-
-        return symbolTable[pos].type;
-    }
-
-    if (node->type == NODE_CHAR)
-        return TYPE_CHAR;
-
-    if (node->type == NODE_BOOL)
-        return TYPE_BOOL;
-
-    if (node->type == NODE_CAST)
-        return node->cast.type;
-
-    // BINOP
     if (node->type == NODE_BINOP) {
-
         DataType left = getNodeType(node->binop.left);
         DataType right = getNodeType(node->binop.right);
-
-        // se um dos lados for float -> resultado float
-        if (left == TYPE_FLOAT || right == TYPE_FLOAT)
-            return TYPE_FLOAT;
-
+        if (left == TYPE_FLOAT || right == TYPE_FLOAT) return TYPE_FLOAT;
         return TYPE_INT;
     }
-
     return TYPE_INT;
 }
 
 DataType getTempType(int index) {
-    if (index < varCount) {
-        return symbolTable[index].type;
-    }
-
+    if (index < varCount) return symbolTable[index].type;
     return tempTypes[index];
 }
 
-//gera codigo de 3 endereços
 char* generateTAC(AST* node) {
     if (node == NULL) return NULL;
 
-    // --- GERADOR DE TAC: CONTROLE DE FLUXO ---
     if (node->type == NODE_IF) {
         char* cond = generateTAC(node->control.condition);
         char* lElse = newLabel();
         char* lEnd = newLabel();
 
-        // 1. Desvio condicional inicial
-        if (tacPrint == 1) {
-            printf("ifFalse %s goto %s;\n", cond, node->control.elseBranch ? lElse : lEnd);
-        } else if (tacPrint == 2) { 
-            printf("    if (!%s) goto %s;\n", cond, node->control.elseBranch ? lElse : lEnd);
-        }
+        if (tacPrint == 1) printf("ifFalse %s goto %s;\n", cond, node->control.elseBranch ? lElse : lEnd);
+        else if (tacPrint == 2) printf("    if (!%s) goto %s;\n", cond, node->control.elseBranch ? lElse : lEnd);
         
-        // 2. Corpo do THEN
         generateTAC(node->control.thenBranch);
         
-        // 3. Tratamento do ELSE (se houver)
         if (node->control.elseBranch) {
             if (tacPrint == 1) {
                 printf("goto %s;\n", lEnd);
                 printf("%s:\n", lElse);
             } else if (tacPrint == 2) {
-                printf("    goto %s;\n", lEnd); // Salta o bloco else se o then já executou
-                printf("    %s:\n", lElse);    // Rótulo do Else indentado
+                printf("    goto %s;\n", lEnd); 
+                printf("    %s:\n", lElse);    
             }
-            
             generateTAC(node->control.elseBranch);
         } else {
-            // Se NÃO houver else, o rótulo de escape do ifFalse precisa ser impresso aqui para o modo TAC puro
-            if (tacPrint == 1) {
-                printf("%s:\n", lElse);
-            } else if (tacPrint == 2) {
-                printf("    %s:\n", lElse);
-            }
+            if (tacPrint == 1) printf("%s:\n", lElse);
+            else if (tacPrint == 2) printf("    %s:\n", lElse);
         }
         
-        // 4. Rótulo de FIM do bloco IF completo
-        if (tacPrint == 1) {
-            printf("%s:\n", lEnd);
-        } else if (tacPrint == 2) {
-            printf("    %s:\n", lEnd); // Rótulo de Fim indentado
-        }
+        if (tacPrint == 1) printf("%s:\n", lEnd);
+        else if (tacPrint == 2) printf("    %s:\n", lEnd); 
         
         return NULL;
     }
@@ -176,7 +151,7 @@ char* generateTAC(AST* node) {
     if (node->type == NODE_WHILE) {
         char* lStart = newLabel();
         char* lEnd = newLabel();
-        pushLoop(lStart, lEnd); // break vai pro lEnd, continue vai pro lStart
+        pushLoop(lStart, lEnd); 
 
         if (tacPrint) printf("%s:\n", lStart);
         char* cond = generateTAC(node->control.condition);
@@ -195,14 +170,14 @@ char* generateTAC(AST* node) {
         char* lStart = newLabel();
         char* lCond = newLabel();
         char* lEnd = newLabel();
-        pushLoop(lCond, lEnd); // no do/while, o continue pula para a avaliação da condição!
+        pushLoop(lCond, lEnd); 
 
         if (tacPrint) printf("%s:\n", lStart);
         if (node->doWhileLoop.body) generateTAC(node->doWhileLoop.body);
         
         if (tacPrint) printf("%s:\n", lCond);
         char* cond = generateTAC(node->doWhileLoop.condition);
-        if (tacPrint) printf("if %s goto %s;\n", cond, lStart); // Se verdadeiro, repete
+        if (tacPrint) printf("if %s goto %s;\n", cond, lStart); 
         
         if (tacPrint) printf("%s:\n", lEnd);
         
@@ -215,53 +190,30 @@ char* generateTAC(AST* node) {
         char* lInc = newLabel();
         char* lEnd = newLabel();
         
-        // 1. Inicialização do FOR (ex: i = 1)
         if (node->forLoop.init) generateTAC(node->forLoop.init);
         
-        // 2. Rótulo de início do laço (L0:)
-        if (tacPrint == 1) {
-            printf("%s:\n", lStart);
-        } else if (tacPrint == 2) {
-            printf("    %s:\n", lStart); // Indentado para o código C
-        }
+        if (tacPrint == 1) printf("%s:\n", lStart);
+        else if (tacPrint == 2) printf("    %s:\n", lStart); 
         
-        // 3. Avaliação da condição (ex: i <= 10)
         if (node->forLoop.condition) {
             char* cond = generateTAC(node->forLoop.condition);
-            if (tacPrint == 1) {
-                printf("ifFalse %s goto %s;\n", cond, lEnd);
-            } else if (tacPrint == 2) {
-                printf("    if (!%s) goto %s;\n", cond, lEnd); 
-            }
+            if (tacPrint == 1) printf("ifFalse %s goto %s;\n", cond, lEnd);
+            else if (tacPrint == 2) printf("    if (!%s) goto %s;\n", cond, lEnd); 
         }
 
-        // 4. Execução do corpo do laço
         pushLoop(lInc, lEnd);
         if (node->forLoop.body) generateTAC(node->forLoop.body);
         
-        // 5. Rótulo de incremento (L1:)
-        if (tacPrint == 1) {
-            printf("%s:\n", lInc);
-        } else if (tacPrint == 2) {
-            printf("    %s:\n", lInc); // Indentado para o código C
-        }
+        if (tacPrint == 1) printf("%s:\n", lInc);
+        else if (tacPrint == 2) printf("    %s:\n", lInc); 
         
-        // 6. Execução do incremento (ex: i = i + 1)
         if (node->forLoop.increment) generateTAC(node->forLoop.increment);
         
-        // 7. Salto de retorno para o início do laço
-        if (tacPrint == 1) {
-            printf("goto %s;\n", lStart);
-        } else if (tacPrint == 2) {
-            printf("    goto %s;\n", lStart); 
-        }
+        if (tacPrint == 1) printf("goto %s;\n", lStart);
+        else if (tacPrint == 2) printf("    goto %s;\n", lStart); 
         
-        // 8. Rótulo de fim do laço (L2:)
-        if (tacPrint == 1) {
-            printf("%s:\n", lEnd);
-        } else if (tacPrint == 2) {
-            printf("    %s:\n", lEnd); // Indentado para o código C
-        }
+        if (tacPrint == 1) printf("%s:\n", lEnd);
+        else if (tacPrint == 2) printf("    %s:\n", lEnd); 
         
         popLoop();
         return NULL;
@@ -273,7 +225,6 @@ char* generateTAC(AST* node) {
         char* caseLabels[20];
         char* lDefault = lEnd;
 
-        // 1. Avalia todas as condições primeiro (como um Assembly real)
         for(int i = 0; i < node->switchStmt.caseCount; i++) {
             caseLabels[i] = newLabel();
             AST* c = node->switchStmt.cases[i];
@@ -290,11 +241,8 @@ char* generateTAC(AST* node) {
         }
         if (tacPrint) printf("goto %s;\n", lDefault);
 
-        // 2. Empilha o label de fim para o BREAK funcionar
-        // Se houver um continue, ele repassa pro laço de fora
         pushLoop(loopDepth > 0 ? loopStartStack[loopDepth - 1] : "L_DUMMY", lEnd); 
         
-        // 3. Imprime os blocos de código
         for(int i = 0; i < node->switchStmt.caseCount; i++) {
             if (tacPrint) printf("%s:\n", caseLabels[i]);
             AST* c = node->switchStmt.cases[i];
@@ -321,9 +269,7 @@ char* generateTAC(AST* node) {
         int num = atoi(temp + 1);
         tempTypes[num] = TYPE_INT;
 
-        if (tacPrint)
-            printf("%s = %d;\n", temp, node->intValue);
-
+        if (tacPrint) printf("%s = %d;\n", temp, node->intValue);
         return temp;
     }
 
@@ -332,9 +278,7 @@ char* generateTAC(AST* node) {
         int num = atoi(temp + 1);
         tempTypes[num] = TYPE_FLOAT;
 
-        if (tacPrint)
-            printf("%s = %.1f;\n", temp, node->floatValue);
-
+        if (tacPrint) printf("%s = %.1f;\n", temp, node->floatValue);
         return temp;
     }
 
@@ -345,7 +289,6 @@ char* generateTAC(AST* node) {
     }
 
     if (node->type == NODE_PRINT) {
-        // Checagem se o nó for um texto literal diretamente
         if (node->printStmt.expr->type == NODE_STRING) {
             char* expr = generateTAC(node->printStmt.expr);
             if (tacPrint == 1) printf("print %s;\n", expr);
@@ -361,13 +304,9 @@ char* generateTAC(AST* node) {
             int num = atoi(expr + 1); 
             DataType type = getTempType(num);
 
-            if (type == TYPE_CHAR) {
-                printf("    printf(\"%%c\\n\", %s);\n", expr);
-            } else if (type == TYPE_STRING) {
-                printf("    printf(\"%%s\\n\", %s);\n", expr); // Imprime a string!
-            } else {
-                printf("    printf(\"%%d\\n\", %s);\n", expr);
-            }
+            if (type == TYPE_CHAR) printf("    printf(\"%%c\\n\", %s);\n", expr);
+            else if (type == TYPE_STRING) printf("    printf(\"%%s\\n\", %s);\n", expr); 
+            else printf("    printf(\"%%d\\n\", %s);\n", expr);
         }
         return NULL;
     }
@@ -380,9 +319,7 @@ char* generateTAC(AST* node) {
         } else if (tacPrint == 2) {
             DataType t = symbolTable[node->symbolIndex].type;
             if (t == TYPE_STRING) {
-                // Lê strings (inclusive com espaços) respeitando o limite de segurança do vetor
                 printf("    scanf(\" %%254[^\\n]\", %s);\n", varTemp); 
-                // Mede o que o usuário digitou e atualiza a variável companheira na hora!
                 printf("    %s_len = strlen(%s);\n", varTemp, varTemp);
             } else if (t == TYPE_CHAR) {
                 printf("    scanf(\" %%c\", &%s);\n", varTemp);
@@ -400,20 +337,16 @@ char* generateTAC(AST* node) {
         int num = atoi(temp + 1);
         tempTypes[num] = TYPE_CHAR;
 
-        if (tacPrint)
-            printf("%s = '%c';\n", temp, node->charValue);
-
+        if (tacPrint) printf("%s = '%c';\n", temp, node->charValue);
         return temp;
     }
 
     if (node->type == NODE_BOOL) {
         char* temp = newTemp();
         int num = atoi(temp + 1);
-        tempTypes[num] = TYPE_INT; // bool vira int no código intermediário
+        tempTypes[num] = TYPE_INT; 
 
-        if (tacPrint)
-            printf("%s = %d;\n", temp, node->boolValue);
-
+        if (tacPrint) printf("%s = %d;\n", temp, node->boolValue);
         return temp;
     }
 
@@ -425,9 +358,7 @@ char* generateTAC(AST* node) {
         char* expr = generateTAC(node->unop.expr);
         char* temp = newTemp();
         if (tacPrint) {
-            if (node->unop.op == T_NOT) {
-                printf("%s = !%s;\n", temp, expr);
-            }
+            if (node->unop.op == T_NOT) printf("%s = !%s;\n", temp, expr);
         }
         return temp;
     }
@@ -439,41 +370,26 @@ char* generateTAC(AST* node) {
         char* left = generateTAC(node->binop.left);
         char* right = generateTAC(node->binop.right);
 
-        // conversão implícita: int -> float (Lado Esquerdo)
         if (leftType == TYPE_INT && rightType == TYPE_FLOAT) {
             char* castTemp = newTemp();
             int castNum = atoi(castTemp + 1);
-
             tempTypes[castNum] = TYPE_FLOAT;
-
-            if (tacPrint == 1) {
-                printf("%s = (float) %s;\n", castTemp, left);
-            } else if (tacPrint == 2) {
-                printf("    %s = (float) %s;\n", castTemp, left); // Formato C indentado
-            }
-
+            if (tacPrint == 1) printf("%s = (float) %s;\n", castTemp, left);
+            else if (tacPrint == 2) printf("    %s = (float) %s;\n", castTemp, left);
             left = castTemp;
         }
 
-        // conversão implícita: float -> int (Lado Direito)
         if (leftType == TYPE_FLOAT && rightType == TYPE_INT) {
             char* castTemp = newTemp();
             int castNum = atoi(castTemp + 1);
-
             tempTypes[castNum] = TYPE_FLOAT;
-
-            if (tacPrint == 1) {
-                printf("%s = (float) %s;\n", castTemp, right);
-            } else if (tacPrint == 2) {
-                printf("    %s = (float) %s;\n", castTemp, right); // Formato C indentado
-            }
-
+            if (tacPrint == 1) printf("%s = (float) %s;\n", castTemp, right);
+            else if (tacPrint == 2) printf("    %s = (float) %s;\n", castTemp, right);
             right = castTemp;
         }
 
         char* temp = newTemp();
         int num = atoi(temp + 1);
-
         char op[5];
 
         switch (node->binop.op) {
@@ -501,145 +417,124 @@ char* generateTAC(AST* node) {
             tempTypes[num] = getNodeType(node);
         }
 
-        // --- PRINT FINAL DA OPERAÇÃO BINÁRIA ---
-        if (tacPrint == 1) {
-            printf("%s = %s %s %s;\n", temp, left, op, right);
-        } else if (tacPrint == 2) {
-            printf("    %s = %s %s %s;\n", temp, left, op, right); // Formato C indentado
-        }
+        if (tacPrint == 1) printf("%s = %s %s %s;\n", temp, left, op, right);
+        else if (tacPrint == 2) printf("    %s = %s %s %s;\n", temp, left, op, right);
 
         return temp;
+    }
+
+    if (node->type == NODE_ARRAY_ACCESS) {
+        char* idx = generateTAC(node->arrayAccess.index);
+        char* idx2 = node->arrayAccess.index2 ? generateTAC(node->arrayAccess.index2) : NULL;
+        char* varTemp = getVarTempByIndex(node->symbolIndex);
+        char* temp = newTemp();
+        int num = atoi(temp + 1);
+        tempTypes[num] = symbolTable[node->symbolIndex].type;
+
+        if (tacPrint == 1) {
+            if (idx2) printf("%s = %s[%s][%s];\n", temp, varTemp, idx, idx2);
+            else printf("%s = %s[%s];\n", temp, varTemp, idx);
+        } else if (tacPrint == 2) {
+            if (idx2) printf("    %s = %s[%s][%s];\n", temp, varTemp, idx, idx2);
+            else printf("    %s = %s[%s];\n", temp, varTemp, idx);
+        }
+        return temp;
+    }
+
+    if (node->type == NODE_ARRAY_ASSIGN) {
+        char* idx = generateTAC(node->arrayAssign.index);
+        char* idx2 = node->arrayAssign.index2 ? generateTAC(node->arrayAssign.index2) : NULL;
+        char* val = generateTAC(node->arrayAssign.value);
+        char* varTemp = getVarTempByIndex(node->symbolIndex);
+        
+        if (tacPrint == 1) {
+            if (idx2) printf("%s[%s][%s] = %s;\n", varTemp, idx, idx2, val);
+            else printf("%s[%s] = %s;\n", varTemp, idx, val);
+        } else if (tacPrint == 2) {
+            if (idx2) printf("    %s[%s][%s] = %s;\n", varTemp, idx, idx2, val);
+            else printf("    %s[%s] = %s;\n", varTemp, idx, val);
+        }
+        return NULL;
     }
 
    if (node->type == NODE_ASSIGN) {
         char* varTemp = getVarTempByIndex(node->symbolIndex);
         AST* value = node->assign.value;
 
-        // TRATAMENTO DE STRINGS (Tempo de Compilação - Tamanho Fixo)
         if (symbolTable[node->symbolIndex].type == TYPE_STRING) {
             char* val = generateTAC(value);
-            // Pega o tamanho real da palavra (sem contar o \0)
             int strLen = getStringSize(node->symbolIndex) - 1; 
 
             if (tacPrint == 1) {
                 printf("%s = %s;\n", varTemp, val);
-                printf("%s_len = %d;\n", varTemp, strLen); // Salva o tamanho no TAC
+                printf("%s_len = %d;\n", varTemp, strLen); 
             } else if (tacPrint == 2) {
                 printf("    strcpy(%s, %s);\n", varTemp, val);
-                printf("    %s_len = %d;\n", varTemp, strLen); // Salva o tamanho no C
+                printf("    %s_len = %d;\n", varTemp, strLen); 
             }
             return NULL;
         }
-        // atribuição simples: NÃO cria temporário extra
+        
         if (value->type == NODE_INT) {
             tempTypes[varNum] = TYPE_INT;
-
-            if (tacPrint == 1) {
-                printf("%s = %d;\n", varTemp, value->intValue);
-            } else if (tacPrint == 2) {
-                printf("    %s = %d;\n", varTemp, value->intValue); // Formato C indentado
-            }
-
+            if (tacPrint == 1) printf("%s = %d;\n", varTemp, value->intValue);
+            else if (tacPrint == 2) printf("    %s = %d;\n", varTemp, value->intValue); 
             return NULL;
         }
 
         if (value->type == NODE_FLOAT) {
             tempTypes[varNum] = TYPE_FLOAT;
-
-            if (tacPrint == 1) {
-                printf("%s = %.1f;\n", varTemp, value->floatValue);
-            } else if (tacPrint == 2) {
-                printf("    %s = %.1f;\n", varTemp, value->floatValue); // Formato C indentado
-            }
-
+            if (tacPrint == 1) printf("%s = %.1f;\n", varTemp, value->floatValue);
+            else if (tacPrint == 2) printf("    %s = %.1f;\n", varTemp, value->floatValue); 
             return NULL;
         }
 
         if (value->type == NODE_CHAR) {
             tempTypes[varNum] = TYPE_CHAR;
-
-            if (tacPrint == 1) {
-                printf("%s = '%c';\n", varTemp, value->charValue);
-            } else if (tacPrint == 2) {
-                printf("    %s = '%c';\n", varTemp, value->charValue); // Formato C indentado
-            }
-
+            if (tacPrint == 1) printf("%s = '%c';\n", varTemp, value->charValue);
+            else if (tacPrint == 2) printf("    %s = '%c';\n", varTemp, value->charValue); 
             return NULL;
         }
 
         if (value->type == NODE_BOOL) {
             tempTypes[varNum] = TYPE_INT;
-
-            if (tacPrint == 1) {
-                printf("%s = %d;\n", varTemp, value->boolValue);
-            } else if (tacPrint == 2) {
-                printf("    %s = %d;\n", varTemp, value->boolValue); // Formato C indentado
-            }
-
+            if (tacPrint == 1) printf("%s = %d;\n", varTemp, value->boolValue);
+            else if (tacPrint == 2) printf("    %s = %d;\n", varTemp, value->boolValue); 
             return NULL;
         }
 
-        // expressão composta: gera temporários normalmente
         char* val = generateTAC(value);
 
-        if (tacPrint == 1) {
-            printf("%s = %s;\n", varTemp, val);
-        } else if (tacPrint == 2) {
-            printf("    %s = %s;\n", varTemp, val); // Formato C indentado
-        }
+        if (tacPrint == 1) printf("%s = %s;\n", varTemp, val);
+        else if (tacPrint == 2) printf("    %s = %s;\n", varTemp, val); 
 
         return NULL;
     }
 
-    if (node->type == NODE_DECL) {
-        return 0;
-    }
+    if (node->type == NODE_DECL) return 0;
 
     if (node->type == NODE_CAST) {
-
         char* expr = generateTAC(node->cast.expr);
-
         char* temp = newTemp();
         int num = atoi(temp + 1);
 
-        // define o tipo do temporário
         tempTypes[num] = node->cast.type;
-
         char typeName[10];
 
         switch (node->cast.type) {
-            case TYPE_INT:
-                strcpy(typeName, "int");
-                break;
-
-            case TYPE_FLOAT:
-                strcpy(typeName, "float");
-                break;
-
-            case TYPE_BOOL:
-                strcpy(typeName, "bool");
-                break;
-
-            case TYPE_CHAR:
-                strcpy(typeName, "char");
-                break;
-
-            default:
-                strcpy(typeName, "?");
-                break;
+            case TYPE_INT: strcpy(typeName, "int"); break;
+            case TYPE_FLOAT: strcpy(typeName, "float"); break;
+            case TYPE_BOOL: strcpy(typeName, "bool"); break;
+            case TYPE_CHAR: strcpy(typeName, "char"); break;
+            default: strcpy(typeName, "?"); break;
         }
 
-        if (tacPrint)
-            printf("%s = (%s) %s;\n", temp, typeName, expr);
-
+        if (tacPrint) printf("%s = (%s) %s;\n", temp, typeName, expr);
         return temp;
     }
 
     if (node->type == NODE_BLOCK) {
-        for (int i = 0; i < node->block.count; i++) {
-            generateTAC(node->block.children[i]);
-        }
-
+        for (int i = 0; i < node->block.count; i++) generateTAC(node->block.children[i]);
         return NULL;
     }
 
@@ -649,59 +544,40 @@ char* generateTAC(AST* node) {
 int countTemps(AST* node) {
     if (node == NULL) return 0;
 
-    if (node->type == NODE_INT ||
-        node->type == NODE_FLOAT ||
-        node->type == NODE_CHAR ||
-        node->type == NODE_BOOL)
+    if (node->type == NODE_INT || node->type == NODE_FLOAT ||
+        node->type == NODE_CHAR || node->type == NODE_BOOL)
         return 1;
 
-    if (node->type == NODE_CAST) {
-        return 1 + countTemps(node->cast.expr);
-    }
+    if (node->type == NODE_CAST) return 1 + countTemps(node->cast.expr);
 
     if (node->type == NODE_BINOP) {
         int total = 1 + countTemps(node->binop.left) + countTemps(node->binop.right);
-
         DataType leftType = getNodeType(node->binop.left);
         DataType rightType = getNodeType(node->binop.right);
-
         if ((leftType == TYPE_INT && rightType == TYPE_FLOAT) ||
             (leftType == TYPE_FLOAT && rightType == TYPE_INT)) {
             total++;
         }
-
         return total;
     }
 
-    if (node->type == NODE_UNOP) {
-        return countTemps(node->unop.expr) + 1;
-    }
+    if (node->type == NODE_UNOP) return countTemps(node->unop.expr) + 1;
+    if (node->type == NODE_PRINT) return countTemps(node->printStmt.expr);
 
     if (node->type == NODE_ASSIGN) {
         AST* value = node->assign.value;
-
-        if (value->type == NODE_INT ||
-            value->type == NODE_FLOAT ||
-            value->type == NODE_CHAR ||
-            value->type == NODE_BOOL) {
-            return 0;
-        }
-
+        if (value->type == NODE_INT || value->type == NODE_FLOAT ||
+            value->type == NODE_CHAR || value->type == NODE_BOOL) return 0;
         return countTemps(value);
     }
 
     if (node->type == NODE_IF) {
-        int total = countTemps(node->control.condition);
-        total += countTemps(node->control.thenBranch);
-        if (node->control.elseBranch) {
-            total += countTemps(node->control.elseBranch);
-        }
+        int total = countTemps(node->control.condition) + countTemps(node->control.thenBranch);
+        if (node->control.elseBranch) total += countTemps(node->control.elseBranch);
         return total;
     }
 
-    if (node->type == NODE_WHILE) {
-        return countTemps(node->control.condition) + countTemps(node->control.thenBranch);
-    }
+    if (node->type == NODE_WHILE) return countTemps(node->control.condition) + countTemps(node->control.thenBranch);
 
     if (node->type == NODE_DO_WHILE) {
         int total = 0;
@@ -724,8 +600,7 @@ int countTemps(AST* node) {
         if (node->switchStmt.expr) total += countTemps(node->switchStmt.expr);
         for(int i = 0; i < node->switchStmt.caseCount; i++) {
             if(node->switchStmt.cases[i]->caseStmt.matchExpr) {
-                total += countTemps(node->switchStmt.cases[i]->caseStmt.matchExpr);
-                total += 1; // +1 porque o TAC vai fazer: t_cmp = expr == case_expr
+                total += countTemps(node->switchStmt.cases[i]->caseStmt.matchExpr) + 1; 
             }
             if(node->switchStmt.cases[i]->caseStmt.body) {
                 total += countTemps(node->switchStmt.cases[i]->caseStmt.body);
@@ -736,15 +611,23 @@ int countTemps(AST* node) {
 
     if (node->type == NODE_BLOCK) {
         int total = 0;
-        for (int i = 0; i < node->block.count; i++)
-            total += countTemps(node->block.children[i]);
+        for (int i = 0; i < node->block.count; i++) total += countTemps(node->block.children[i]);
         return total;
     }
     
+    if (node->type == NODE_ARRAY_ACCESS) {
+        int c = 1 + countTemps(node->arrayAccess.index);
+        if (node->arrayAccess.index2) c += countTemps(node->arrayAccess.index2);
+        return c;
+    }
+    if (node->type == NODE_ARRAY_ASSIGN) {
+        int c = countTemps(node->arrayAssign.index) + countTemps(node->arrayAssign.value);
+        if (node->arrayAssign.index2) c += countTemps(node->arrayAssign.index2);
+        return c;
+    }
 
     return 0;
 }
-
 
 char* nodeTypeToString(NodeType t) {
     switch(t) {
@@ -762,12 +645,10 @@ char* nodeTypeToString(NodeType t) {
     }
 }
 
-//pegar próximo token
 void advance() {
     currentToken = nextToken();
 }
 
-//criar nós
 AST* createIntNode(int value) {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_INT;
@@ -796,11 +677,15 @@ AST* createVarNode(char* name) {
     node->type = NODE_VAR;
     strcpy(node->varName, name);
     
-    node->symbolIndex = findVar(name); // Resolve qual é o "x" correto agora
+    node->symbolIndex = findVar(name);
     if (node->symbolIndex == -1) {
-        printf("Erro Semantico: Variavel '%s' nao declarada!\n", name);
-        exit(1);
+        semanticError("Variavel '%s' nao declarada!", name);
     }
+    if (symbolTable[node->symbolIndex].isInitialized == 0) {
+        printf("\n[!] AVISO (Linha %d, Coluna %d): Variavel '%s' lida sem ser inicializada.\n", 
+                currentToken.line, currentToken.column, name);
+    }
+    symbolTable[node->symbolIndex].isUsed = 1;
     return node;
 }
 
@@ -811,33 +696,32 @@ AST* createAssignNode(char* name, AST* value) {
     node->assign.value = value;
     
     node->symbolIndex = findVar(name);
+    
     if (node->symbolIndex == -1) {
-        printf("Erro Semantico: Variavel '%s' nao declarada na atribuicao!\n", name);
-        exit(1);
+        semanticError("Variavel '%s' nao declarada na atribuicao!", name);
     }
+    
+    symbolTable[node->symbolIndex].isInitialized = 1;
+    
     return node;
 }
 
 int findVar(char* name) {
-    // Busca de trás para frente (prioriza o escopo mais interno)
     for (int i = varCount - 1; i >= 0; i--) {
-        // Só considera a variável se ela estiver ativa
         if (symbolTable[i].isActive && strcmp(symbolTable[i].name, name) == 0) {
             return i;
         }
     }
-    return -1; // Não encontrou em nenhum escopo visível
+    return -1; 
 }
 
-int addSymbol(char* name, DataType type) {
-    // Verifica se a variável já existe NO MESMO ESCOPO
+int addSymbol(char* name, DataType type, int isArray, int arraySize, int arrayCols) {
     for (int i = varCount - 1; i >= 0; i--) {
-        if (!symbolTable[i].isActive) continue; // Ignora variáveis de blocos já fechados
-        if (symbolTable[i].scope < currentScope) break; // Saiu do escopo atual, pode parar
+        if (!symbolTable[i].isActive) continue; 
+        if (symbolTable[i].scope < currentScope) break; 
         
         if (strcmp(symbolTable[i].name, name) == 0) {
-            printf("Erro: Variavel '%s' ja declarada neste escopo!\n", name);
-            exit(1);
+            semanticError("Variavel '%s' ja declarada neste escopo!", name);
         }
     }
 
@@ -845,20 +729,25 @@ int addSymbol(char* name, DataType type) {
         strcpy(symbolTable[varCount].name, name);
         symbolTable[varCount].type = type;
         symbolTable[varCount].scope = currentScope;
-        symbolTable[varCount].isActive = 1; // Marca como ativa
+        symbolTable[varCount].isActive = 1; 
+        symbolTable[varCount].isArray = isArray;      
+        symbolTable[varCount].arraySize = arraySize;  
+        symbolTable[varCount].arrayCols = arrayCols;
+        symbolTable[varCount].line = currentToken.line;
+        symbolTable[varCount].isInitialized = 0;
+        symbolTable[varCount].isUsed = 0;
         
-        // Inicializa com zero
         if (type == TYPE_INT) symbolTable[varCount].value.i = 0;
         else if (type == TYPE_FLOAT) symbolTable[varCount].value.f = 0.0;
         else if (type == TYPE_CHAR) symbolTable[varCount].value.c = '\0';
         else if (type == TYPE_STRING) strcpy(symbolTable[varCount].value.s, "");
         
         varCount++;
-        return varCount - 1; // Retorna o ID do TAC que acabou de ser criado
+        return varCount - 1; 
     } else {
-        printf("Erro: Tabela de simbolos cheia!\n");
-        exit(1);
+        semanticError("Tabela de simbolos cheia!");
     }
+    return -1;
 }
 
 AST* createControl(AST* cond, AST* thenB, AST* elseB) {
@@ -870,14 +759,16 @@ AST* createControl(AST* cond, AST* thenB, AST* elseB) {
     return node;
 }
 
-AST* createDeclNode(char* name, DataType type) {
+AST* createDeclNode(char* name, DataType type, int isArray, int arraySize, int arrayCols) {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_DECL;
     strcpy(node->decl.varName, name);
     node->decl.type = type;
+    node->decl.isArray = isArray;
+    node->decl.arraySize = arraySize;
+    node->decl.arrayCols = arrayCols;
     
-    // Adiciona e já salva o índice na AST!
-    node->symbolIndex = addSymbol(name, type);
+    node->symbolIndex = addSymbol(name, type, isArray, arraySize, arrayCols);
     return node;
 }
 
@@ -891,18 +782,13 @@ AST* createCastNode(DataType type, AST* expr) {
 
 AST* createUnOpNode(TokenType op, AST* expr) {
     AST* node = malloc(sizeof(AST));
-
     node->type = NODE_UNOP;
     node->unop.op = op;
     node->unop.expr = expr;
-
     return node;
 }
 
-//PARSER
 AST* parseFactor() {
-
-    // Lê o operador unário NOT (!)
     if (currentToken.type == T_NOT) {
         advance();
         AST* expr = parseFactor();
@@ -934,43 +820,25 @@ AST* parseFactor() {
     }
 
     if (currentToken.type == T_LPAREN) {
-    advance();
-
-    //TENTA DETECTAR CAST
-    if (currentToken.type == T_INT_TYPE ||
-        currentToken.type == T_FLOAT_TYPE ||
-        currentToken.type == T_BOOL_TYPE) {
-
-        DataType type;
-
-        if (currentToken.type == T_INT_TYPE) type = TYPE_INT;
-        else if (currentToken.type == T_FLOAT_TYPE) type = TYPE_FLOAT;
-        else type = TYPE_BOOL;
-
         advance();
+        if (currentToken.type == T_INT_TYPE || currentToken.type == T_FLOAT_TYPE || currentToken.type == T_BOOL_TYPE) {
+            DataType type;
+            if (currentToken.type == T_INT_TYPE) type = TYPE_INT;
+            else if (currentToken.type == T_FLOAT_TYPE) type = TYPE_FLOAT;
+            else type = TYPE_BOOL;
 
-        if (currentToken.type != T_RPAREN) {
-            printf("Erro: esperado ')'\n");
-            exit(1);
+            advance();
+            if (currentToken.type != T_RPAREN) syntaxError("esperado ')' apos cast");
+            advance();
+            AST* expr = parseFactor(); 
+            return createCastNode(type, expr);
         }
 
+        AST* node = parseLogical();
+        if (currentToken.type != T_RPAREN) syntaxError("esperado ')'");
         advance();
-
-        AST* expr = parseFactor(); //aplica cast
-        return createCastNode(type, expr);
+        return node;
     }
-
-    //expressão normal
-    AST* node = parseLogical();
-
-    if (currentToken.type != T_RPAREN) {
-        printf("Erro: esperado ')'\n");
-        exit(1);
-    }
-
-    advance();
-    return node;
-}
 
     if (currentToken.type == T_CHAR) {
         node = createCharNode(currentToken.lexeme[0]);
@@ -979,77 +847,76 @@ AST* parseFactor() {
     }
 
     if (currentToken.type == T_BOOL) {
-
-        int val =
-            strcmp(currentToken.lexeme, "true") == 0;
-
+        int val = strcmp(currentToken.lexeme, "true") == 0;
         node = createBoolNode(val);
-
         advance();
         return node;
     }
 
     if (currentToken.type == T_ID) {
-        AST* node = createVarNode(currentToken.lexeme);
+        char varName[100];
+        strcpy(varName, currentToken.lexeme);
         advance();
-        return node;
+        
+        if (currentToken.type == T_LBRACKET) {
+            advance(); 
+            AST* indexExpr = parseLogical(); 
+            if (currentToken.type != T_RBRACKET) syntaxError("esperado ']'");
+            advance(); 
+            
+            AST* index2Expr = NULL;
+            if (currentToken.type == T_LBRACKET) {
+                advance();
+                index2Expr = parseLogical();
+                if (currentToken.type != T_RBRACKET) syntaxError("esperado ']'");
+                advance();
+            }
+            return createArrayAccessNode(varName, indexExpr, index2Expr);
+        }
+        return createVarNode(varName);
     }
 
-    printf("Erro: fator inválido\n");
-    exit(1);
-
+    syntaxError("fator invalido (token inesperado '%s')", currentToken.lexeme);
+    return NULL;
 }
 
-//termo(* e /)
 AST* parseTerm() {
     AST* node = parseFactor();
-
     while (currentToken.type == T_MUL || currentToken.type == T_DIV) {
         TokenType op = currentToken.type;
         advance();
         AST* right = parseFactor();
         node = createBinOpNode(op, node, right);
     }
-
     return node;
 }
 
-//expressão(+ e -)
 AST* parseExpression() {
     AST* node = parseTerm();
-
     while (currentToken.type == T_PLUS || currentToken.type == T_MINUS) {
         TokenType op = currentToken.type;
         advance();
         AST* right = parseTerm();
         node = createBinOpNode(op, node, right);
     }
-
     return node;
 }
 
-//relacionais
 AST* parseRelational() {
     AST* node = parseExpression();
-
     while (currentToken.type == T_GT || currentToken.type == T_LT ||
             currentToken.type == T_GTE || currentToken.type == T_LTE ||
             currentToken.type == T_EQ || currentToken.type == T_NEQ) {
-
         TokenType op = currentToken.type;
         advance();
-
         AST* right = parseExpression();
         node = createBinOpNode(op, node, right);
     }
-
     return node;
 }
 
-//logicos
 AST* parseLogical() {
-    AST* node = parseRelational(); // ou parseExpression, dependendo de como está seu código base
-
+    AST* node = parseRelational(); 
     while (currentToken.type == T_AND || currentToken.type == T_OR) {
         TokenType op = currentToken.type;
         advance();
@@ -1062,58 +929,32 @@ AST* parseLogical() {
         parent->binop.right = right;
         node = parent;
     }
-    
     return node;
 }
 
-//parser do IF
 AST* parseIf() {
-
-    advance(); // pula "if"
-
-    if (currentToken.type != T_LPAREN) {
-        printf("Erro: esperado '('\n");
-        exit(1);
-    }
-
+    advance(); 
+    if (currentToken.type != T_LPAREN) syntaxError("esperado '(' apos 'if'");
     advance();
     AST* condition = parseLogical();
-
-    if (currentToken.type != T_RPAREN) {
-        printf("Erro: esperado ')'\n");
-        exit(1);
-    }
-
+    if (currentToken.type != T_RPAREN) syntaxError("esperado ')' apos a condicao do if");
     advance();
 
-    //THEN
-    if (currentToken.type != T_LBRACE) {
-        printf("Erro: esperado '{'\n");
-        exit(1);
-    }
-
-    advance(); // entra no bloco
+    if (currentToken.type != T_LBRACE) syntaxError("esperado '{' para iniciar o bloco if");
+    advance(); 
     AST* thenBranch = parseBlock(); 
 
-    //ELSE
-     AST* elseBranch = NULL;
-
+    AST* elseBranch = NULL;
     if (currentToken.type == T_ELSE) {
         advance();
-
-        // O truque: se vier um 'if' logo a seguir, chama a si mesmo!
         if (currentToken.type == T_IF) {
             elseBranch = parseIf(); 
         } else {
-            if (currentToken.type != T_LBRACE) {
-                printf("Erro: esperado '{' apos else\n");
-                exit(1);
-            }
-            advance(); // entra no bloco
+            if (currentToken.type != T_LBRACE) syntaxError("esperado '{' apos 'else'");
+            advance(); 
             elseBranch = parseBlock();
         }
     }
-
     return createControl(condition, thenBranch, elseBranch);
 }
 
@@ -1163,27 +1004,88 @@ AST* createContinueNode() {
     return node;
 }
 
-AST* parseStatement() {
+AST* createArrayAccessNode(char* name, AST* indexExpr, AST* index2Expr) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_ARRAY_ACCESS;
+    node->arrayAccess.index = indexExpr;
+    node->arrayAccess.index2 = index2Expr;
+    
+    node->symbolIndex = findVar(name);
+    if (node->symbolIndex == -1) semanticError("Vetor/Matriz '%s' nao declarado!", name);
 
-    // PARSING: SWITCH
+    if (symbolTable[node->symbolIndex].isInitialized == 0) {
+        printf("\n[!] AVISO (Linha %d, Coluna %d): Vetor/Matriz '%s' lido sem ser inicializado.\n", 
+                currentToken.line, currentToken.column, name);
+    }
+    symbolTable[node->symbolIndex].isUsed = 1;
+    
+    int isArr = symbolTable[node->symbolIndex].isArray;
+    
+    if (isArr == 1 && index2Expr != NULL) semanticError("'%s' e um vetor 1D, mas recebeu 2 indices!", name);
+    if (isArr == 2 && index2Expr == NULL) semanticError("'%s' e uma matriz 2D, precisa de 2 indices!", name);
+
+    if (indexExpr->type == NODE_INT) {
+        int idx = indexExpr->intValue;
+        int max = symbolTable[node->symbolIndex].arraySize;
+        if (idx < 0 || idx >= max) semanticError("Indice/Linha %d fora dos limites de '%s' (Max: %d)!", idx, name, max);
+    }
+    
+    if (isArr == 2 && index2Expr->type == NODE_INT) {
+        int idx2 = index2Expr->intValue;
+        int max2 = symbolTable[node->symbolIndex].arrayCols;
+        if (idx2 < 0 || idx2 >= max2) semanticError("Coluna %d fora dos limites de '%s' (Max: %d)!", idx2, name, max2);
+    }
+    return node;
+}
+
+AST* createArrayAssignNode(char* name, AST* indexExpr, AST* index2Expr, AST* value) {
+    AST* node = malloc(sizeof(AST));
+    node->type = NODE_ARRAY_ASSIGN;
+    strcpy(node->arrayAssign.varName, name);
+    node->arrayAssign.index = indexExpr;
+    node->arrayAssign.index2 = index2Expr;
+    node->arrayAssign.value = value;
+    
+    node->symbolIndex = findVar(name);
+    if (node->symbolIndex == -1) semanticError("Vetor/Matriz '%s' nao declarado!", name);
+    symbolTable[node->symbolIndex].isInitialized = 1;
+
+    int isArr = symbolTable[node->symbolIndex].isArray;
+    
+    if (isArr == 1 && index2Expr != NULL) semanticError("'%s' e um vetor 1D, mas recebeu 2 indices!", name);
+    if (isArr == 2 && index2Expr == NULL) semanticError("'%s' e uma matriz 2D, precisa de 2 indices!", name);
+
+    if (indexExpr->type == NODE_INT) {
+        int idx = indexExpr->intValue;
+        int max = symbolTable[node->symbolIndex].arraySize;
+        if (idx < 0 || idx >= max) semanticError("Indice/Linha %d fora dos limites de '%s' (Max: %d)!", idx, name, max);
+    }
+    if (isArr == 2 && index2Expr->type == NODE_INT) {
+        int idx2 = index2Expr->intValue;
+        int max2 = symbolTable[node->symbolIndex].arrayCols;
+        if (idx2 < 0 || idx2 >= max2) semanticError("Coluna %d fora dos limites de '%s' (Max: %d)!", idx2, name, max2);
+    }
+    return node;
+}
+
+AST* parseStatement() {
     if (currentToken.type == T_SWITCH) {
         advance(); 
-        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
+        if (currentToken.type != T_LPAREN) syntaxError("esperado '(' apos 'switch'");
         advance();
         AST* expr = parseLogical(); 
-        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
+        if (currentToken.type != T_RPAREN) syntaxError("esperado ')' apos expressao do switch");
         advance();
-        if (currentToken.type != T_LBRACE) { printf("Erro: esperado '{'\n"); exit(1); }
+        if (currentToken.type != T_LBRACE) syntaxError("esperado '{' para iniciar o bloco do switch");
         advance();
 
         AST* switchNode = createSwitchNode(expr);
 
-        // Lê os cases até fechar a chave
         while (currentToken.type != T_RBRACE && currentToken.type != T_EOF) {
             if (currentToken.type == T_CASE) {
                 advance();
                 AST* caseExpr = parseLogical();
-                if (currentToken.type != T_COLON) { printf("Erro: esperado ':'\n"); exit(1); }
+                if (currentToken.type != T_COLON) syntaxError("esperado ':' apos expressao do case");
                 advance();
                 
                 AST* caseBody = malloc(sizeof(AST));
@@ -1196,7 +1098,7 @@ AST* parseStatement() {
                 
             } else if (currentToken.type == T_DEFAULT) {
                 advance();
-                if (currentToken.type != T_COLON) { printf("Erro: esperado ':'\n"); exit(1); }
+                if (currentToken.type != T_COLON) syntaxError("esperado ':' apos 'default'");
                 advance();
                 
                 AST* defaultBody = malloc(sizeof(AST));
@@ -1207,320 +1109,35 @@ AST* parseStatement() {
                 }
                 switchNode->switchStmt.cases[switchNode->switchStmt.caseCount++] = createCaseNode(NULL, defaultBody);
             } else {
-                advance(); // ignora lixo para não travar
+                advance(); 
             }
         }
-        if (currentToken.type != T_RBRACE) { printf("Erro: esperado '}' no switch\n"); exit(1); }
+        if (currentToken.type != T_RBRACE) syntaxError("esperado '}' para fechar o switch");
         advance();
         return switchNode;
     }
 
-    // PARSING: BREAK e CONTINUE
     if (currentToken.type == T_BREAK) {
         advance();
-        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
+        if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' apos 'break'");
         advance();
         return createBreakNode();
     }
 
     if (currentToken.type == T_CONTINUE) {
         advance();
-        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
+        if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' apos 'continue'");
         advance();
         return createContinueNode();
     }
 
-    // PARSING: DO / WHILE
-    if (currentToken.type == T_DO) {
-        advance(); // pula "do"
-        if (currentToken.type != T_LBRACE) { printf("Erro: esperado '{'\n"); exit(1); }
-        advance();
-        
-        AST* body = parseBlock(); // lê o bloco de código
-        
-        if (currentToken.type != T_WHILE) { printf("Erro: esperado 'while'\n"); exit(1); }
-        advance();
-        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
-        advance();
-        
-        AST* cond = parseLogical();
-        
-        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
-        advance();
-        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
-        advance();
-        
-        return createDoWhileNode(body, cond);
-    }
-
-    // PARSING: FOR
-    if (currentToken.type == T_FOR) {
-        advance(); // pula "for"
-        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
-        advance();
-        
-        // Inicialização
-        AST* init = parseStatement(); // parseStatement já consome o ';'
-        
-        // Condição
-        AST* cond = parseLogical();
-        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
-        advance();
-        
-        // Incremento (Lemos como uma atribuição simples, unitário ou composto, sem o ';' no final)
-        AST* inc = NULL;
-        if (currentToken.type == T_ID) {
-            char varName[100];
-            strcpy(varName, currentToken.lexeme);
-            advance();
-            
-            if (currentToken.type == T_ASSIGN) {
-                advance(); // pula '='
-                AST* val = parseLogical();
-                inc = createAssignNode(varName, val);
-            } 
-            else if (currentToken.type == T_INC) {
-                advance(); // pula '++'
-                AST* varNode = createVarNode(varName);
-                AST* oneNode = createIntNode(1);
-                AST* addNode = createBinOpNode(T_PLUS, varNode, oneNode);
-                inc = createAssignNode(varName, addNode);
-            } 
-            else if (currentToken.type == T_DEC) {
-                advance(); // pula '--'
-                AST* varNode = createVarNode(varName);
-                AST* oneNode = createIntNode(1);
-                AST* subNode = createBinOpNode(T_MINUS, varNode, oneNode);
-                inc = createAssignNode(varName, subNode);
-            }
-            // NOVO: Operadores compostos no incremento do FOR (ex: i += 2)
-            else if (currentToken.type == T_PLUS_ASSIGN || currentToken.type == T_MINUS_ASSIGN || 
-                     currentToken.type == T_MUL_ASSIGN || currentToken.type == T_DIV_ASSIGN) {
-                
-                TokenType opType;
-                if (currentToken.type == T_PLUS_ASSIGN) opType = T_PLUS;
-                else if (currentToken.type == T_MINUS_ASSIGN) opType = T_MINUS;
-                else if (currentToken.type == T_MUL_ASSIGN) opType = T_MUL;
-                else opType = T_DIV;
-
-                advance(); // pula o operador composto (ex: '+=')
-                
-                AST* valueNode = parseLogical(); // Lê o valor da direita
-                
-                // O TRUQUE: Transforma "i += 2" em "i = i + 2"
-                AST* varNode = createVarNode(varName);
-                AST* binOpNode = createBinOpNode(opType, varNode, valueNode);
-                inc = createAssignNode(varName, binOpNode);
-            }
-        }
-        
-        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
-        advance();
-        if (currentToken.type != T_LBRACE) { printf("Erro: esperado '{'\n"); exit(1); }
-        advance();
-        
-        AST* body = parseBlock();
-        
-        return createForNode(init, cond, inc, body);
-    }
-
-    // Se encontrar um bloco avulso (usado para escopos locais restritos)
-    if (currentToken.type == T_LBRACE) {
-        advance(); // Consome a chave '{'
-        return parseBlock(); // Lê tudo lá dentro até o '}'
-    }
-
-    if (currentToken.type == T_PRINT) {
-        advance(); // pula "print"
-        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
-        advance();
-        AST* expr = parseLogical();
-        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
-        advance();
-        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
-        advance();
-        return createPrintNode(expr);
-    }
-
-    if (currentToken.type == T_READ) {
-        advance(); // pula "read"
-        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
-        advance();
-        if (currentToken.type != T_ID) { printf("Erro: esperado identificador\n"); exit(1); }
-        
-        char varName[50];
-        strcpy(varName, currentToken.lexeme);
-        advance();
-        
-        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
-        advance();
-        if (currentToken.type != T_SEMICOLON) { printf("Erro: esperado ';'\n"); exit(1); }
-        advance();
-        return createReadNode(varName);
-    }
-
-    if (currentToken.type == T_INT_TYPE ||
-        currentToken.type == T_FLOAT_TYPE ||
-        currentToken.type == T_BOOL_TYPE ||
-        currentToken.type == T_CHAR_TYPE ||
-        currentToken.type == T_STRING_TYPE) {
-
-        DataType type;
-
-        if (currentToken.type == T_INT_TYPE) type = TYPE_INT;
-        else if (currentToken.type == T_FLOAT_TYPE) type = TYPE_FLOAT;
-        else if (currentToken.type == T_BOOL_TYPE) type = TYPE_BOOL;
-        else if (currentToken.type == T_CHAR_TYPE) type = TYPE_CHAR;
-        else type = TYPE_STRING;
-
-        advance();
-
-        if (currentToken.type != T_ID) {
-            printf("Erro: esperado identificador na declaracao\n");
-            exit(1);
-        }
-
-        char name[50];
-        strcpy(name, currentToken.lexeme);
-
-        advance();
-
-        // 1. Cria o nó de declaração (isso já salva a variável na Tabela de Símbolos!)
-        AST* declNode = createDeclNode(name, type);
-
-        // 2. Verifica se o usuário quer inicializar logo de cara (ex: int a = 5;)
-        if (currentToken.type == T_ASSIGN) {
-            advance(); // Consome o '='
-            
-            AST* valueNode = parseLogical(); // Lê o que vem depois do igual
-            
-            if (currentToken.type != T_SEMICOLON) {
-                printf("Erro: esperado ';' apos inicializacao de %s\n", name);
-                exit(1);
-            }
-            advance(); // Consome o ';'
-
-            // Cria o nó de atribuição
-            AST* assignNode = createAssignNode(name, valueNode);
-
-            // Cria um "mini-bloco" disfarçado para retornar os dois comandos juntos
-            AST* blockNode = malloc(sizeof(AST));
-            blockNode->type = NODE_BLOCK;
-            blockNode->block.count = 2;
-            blockNode->block.children[0] = declNode;
-            blockNode->block.children[1] = assignNode;
-
-            return blockNode;
-        }
-
-        // 3. Se for só uma declaração normal sem inicializar (ex: int a;)
-        if (currentToken.type != T_SEMICOLON) {
-            printf("Erro: esperado ';' apos declaracao de %s\n", name);
-            exit(1);
-        }
-
-        advance(); // Consome o ';'
-
-        return declNode;
-    }
-
-    // 1. Pular pontos e vírgulas inúteis
-    while (currentToken.type == T_SEMICOLON) {
-        advance();
-    }
-
-    // 2. Se for IF, chama o parser do IF
-    if (currentToken.type == T_IF) {
-        return parseIf();
-    }
-
-    // 3. Se for um ID, significa que é uma ATRIBUIÇÃO ou INCREMENTO/DECREMENTO
-    // 3. Se for um ID, significa que é uma ATRIBUIÇÃO ou INCREMENTO/DECREMENTO/COMPOSTO
-    if (currentToken.type == T_ID) {
-        char varName[100];
-        strcpy(varName, currentToken.lexeme);
-
-        advance(); // pula ID
-
-        // Caso 1: Atribuição normal (a = 5;)
-        if (currentToken.type == T_ASSIGN) {
-            advance(); // pula '='
-            AST* value = parseLogical();
-            if (currentToken.type != T_SEMICOLON) {
-                printf("Erro: esperado ';' apos atribuicao de %s\n", varName);
-                exit(1);
-            }
-            advance(); // consome ;
-            return createAssignNode(varName, value);
-        } 
-        // Caso 2: Incremento (a++;)
-        else if (currentToken.type == T_INC) {
-            advance(); // pula '++'
-            if (currentToken.type != T_SEMICOLON) {
-                printf("Erro: esperado ';' apos '%s++'\n", varName);
-                exit(1);
-            }
-            advance(); // consome ;
-            
-            AST* varNode = createVarNode(varName);
-            AST* oneNode = createIntNode(1);
-            AST* addNode = createBinOpNode(T_PLUS, varNode, oneNode);
-            return createAssignNode(varName, addNode);
-        }
-        // Caso 3: Decremento (a--;)
-        else if (currentToken.type == T_DEC) {
-            advance(); // pula '--'
-            if (currentToken.type != T_SEMICOLON) {
-                printf("Erro: esperado ';' apos '%s--'\n", varName);
-                exit(1);
-            }
-            advance(); // consome ;
-            
-            AST* varNode = createVarNode(varName);
-            AST* oneNode = createIntNode(1);
-            AST* subNode = createBinOpNode(T_MINUS, varNode, oneNode);
-            return createAssignNode(varName, subNode);
-        } 
-        // Caso 4: Operadores Compostos (a += 5, a -= 3, etc)
-        else if (currentToken.type == T_PLUS_ASSIGN || currentToken.type == T_MINUS_ASSIGN || 
-                 currentToken.type == T_MUL_ASSIGN || currentToken.type == T_DIV_ASSIGN) {
-            
-            TokenType opType;
-            if (currentToken.type == T_PLUS_ASSIGN) opType = T_PLUS;
-            else if (currentToken.type == T_MINUS_ASSIGN) opType = T_MINUS;
-            else if (currentToken.type == T_MUL_ASSIGN) opType = T_MUL;
-            else opType = T_DIV;
-
-            advance(); // pula o operador composto (ex: '+=')
-            
-            AST* valueNode = parseLogical(); // Lê o valor da direita
-            
-            if (currentToken.type != T_SEMICOLON) {
-                printf("Erro: esperado ';' apos operacao composta em '%s'\n", varName);
-                exit(1);
-            }
-            advance(); // consome ;
-            
-            // O TRUQUE: Transforma "a += 5" em "a = a + 5"
-            AST* varNode = createVarNode(varName);
-            AST* binOpNode = createBinOpNode(opType, varNode, valueNode);
-            return createAssignNode(varName, binOpNode);
-        } 
-        // Caso 5: Se não for nada disso, dá erro!
-        else {
-            // Atualizei a mensagem de erro para incluir os novos operadores!
-            printf("Erro: esperado '=', '++', '--', '+=', '-=', '*=' ou '/=' apos o identificador %s\n", varName);
-            exit(1);
-        }
-    }
-
     if (currentToken.type == T_WHILE) {
-        advance(); // pula T_WHILE
-        if (currentToken.type != T_LPAREN) { printf("Erro: esperado '('\n"); exit(1); }
-        advance(); // pula '('
+        advance(); 
+        if (currentToken.type != T_LPAREN) syntaxError("esperado '(' apos 'while'");
+        advance(); 
         AST* cond = parseLogical();
-        if (currentToken.type != T_RPAREN) { printf("Erro: esperado ')'\n"); exit(1); }
-        advance(); // pula ')'
+        if (currentToken.type != T_RPAREN) syntaxError("esperado ')' apos condicao do while");
+        advance(); 
         
         AST* body = parseBlock();
         
@@ -1532,20 +1149,301 @@ AST* parseStatement() {
         return node;
     }
 
-    // Se o token for um '=', um número ou qualquer outra coisa solta:
-    printf("Erro: comando invalido. Nao se pode começar um comando com '%s'\n", currentToken.lexeme);
-    printf("DEBUG: Tentando ler token tipo %d lexema '%s'\n", currentToken.type, currentToken.lexeme);
-    exit(1);
+    if (currentToken.type == T_DO) {
+        advance(); 
+        if (currentToken.type != T_LBRACE) syntaxError("esperado '{' apos 'do'");
+        advance();
+        
+        AST* body = parseBlock(); 
+        
+        if (currentToken.type != T_WHILE) syntaxError("esperado 'while' no fim do bloco 'do'");
+        advance();
+        if (currentToken.type != T_LPAREN) syntaxError("esperado '(' apos 'while'");
+        advance();
+        
+        AST* cond = parseLogical();
+        
+        if (currentToken.type != T_RPAREN) syntaxError("esperado ')' apos condicao");
+        advance();
+        if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' no final do do-while");
+        advance();
+        
+        return createDoWhileNode(body, cond);
+    }
+
+    if (currentToken.type == T_FOR) {
+        advance(); 
+        if (currentToken.type != T_LPAREN) syntaxError("esperado '(' apos 'for'");
+        advance();
+        
+        AST* init = parseStatement(); 
+        
+        AST* cond = parseLogical();
+        if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' apos condicao do for");
+        advance();
+        
+        AST* inc = NULL;
+        if (currentToken.type == T_ID) {
+            char varName[100];
+            strcpy(varName, currentToken.lexeme);
+            advance();
+            
+            if (currentToken.type == T_ASSIGN) {
+                advance(); 
+                AST* val = parseLogical();
+                inc = createAssignNode(varName, val);
+            } 
+            else if (currentToken.type == T_INC) {
+                advance(); 
+                AST* varNode = createVarNode(varName);
+                AST* oneNode = createIntNode(1);
+                AST* addNode = createBinOpNode(T_PLUS, varNode, oneNode);
+                inc = createAssignNode(varName, addNode);
+            } 
+            else if (currentToken.type == T_DEC) {
+                advance(); 
+                AST* varNode = createVarNode(varName);
+                AST* oneNode = createIntNode(1);
+                AST* subNode = createBinOpNode(T_MINUS, varNode, oneNode);
+                inc = createAssignNode(varName, subNode);
+            }
+            else if (currentToken.type == T_PLUS_ASSIGN || currentToken.type == T_MINUS_ASSIGN || 
+                     currentToken.type == T_MUL_ASSIGN || currentToken.type == T_DIV_ASSIGN) {
+                TokenType opType;
+                if (currentToken.type == T_PLUS_ASSIGN) opType = T_PLUS;
+                else if (currentToken.type == T_MINUS_ASSIGN) opType = T_MINUS;
+                else if (currentToken.type == T_MUL_ASSIGN) opType = T_MUL;
+                else opType = T_DIV;
+
+                advance(); 
+                AST* valueNode = parseLogical(); 
+                AST* varNode = createVarNode(varName);
+                AST* binOpNode = createBinOpNode(opType, varNode, valueNode);
+                inc = createAssignNode(varName, binOpNode);
+            }
+        }
+        
+        if (currentToken.type != T_RPAREN) syntaxError("esperado ')' no for");
+        advance();
+        if (currentToken.type != T_LBRACE) syntaxError("esperado '{' para iniciar o bloco do for");
+        advance();
+        
+        AST* body = parseBlock();
+        return createForNode(init, cond, inc, body);
+    }
+
+    if (currentToken.type == T_LBRACE) {
+        advance(); 
+        return parseBlock(); 
+    }
+
+    if (currentToken.type == T_PRINT) {
+        advance(); 
+        if (currentToken.type != T_LPAREN) syntaxError("esperado '(' apos 'print'");
+        advance();
+        AST* expr = parseLogical();
+        if (currentToken.type != T_RPAREN) syntaxError("esperado ')' apos expressao do print");
+        advance();
+        if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' apos comando print");
+        advance();
+        return createPrintNode(expr);
+    }
+
+    if (currentToken.type == T_READ) {
+        advance(); 
+        if (currentToken.type != T_LPAREN) syntaxError("esperado '(' apos 'read'");
+        advance();
+        if (currentToken.type != T_ID) syntaxError("esperado identificador de variavel no read");
+        
+        char varName[50];
+        strcpy(varName, currentToken.lexeme);
+        advance();
+        
+        if (currentToken.type != T_RPAREN) syntaxError("esperado ')' apos variavel do read");
+        advance();
+        if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' apos comando read");
+        advance();
+        return createReadNode(varName);
+    }
+
+    if (currentToken.type == T_INT_TYPE || currentToken.type == T_FLOAT_TYPE ||
+        currentToken.type == T_BOOL_TYPE || currentToken.type == T_CHAR_TYPE ||
+        currentToken.type == T_STRING_TYPE) {
+
+        DataType type;
+        if (currentToken.type == T_INT_TYPE) type = TYPE_INT;
+        else if (currentToken.type == T_FLOAT_TYPE) type = TYPE_FLOAT;
+        else if (currentToken.type == T_BOOL_TYPE) type = TYPE_BOOL;
+        else if (currentToken.type == T_CHAR_TYPE) type = TYPE_CHAR;
+        else type = TYPE_STRING;
+
+        advance();
+
+        if (currentToken.type != T_ID) syntaxError("esperado nome da variavel na declaracao");
+
+        char name[50];
+        strcpy(name, currentToken.lexeme);
+        advance(); 
+
+        int isArray = 0;
+        int arraySize = 0;
+        int arrayCols = 0;
+
+        if (currentToken.type == T_LBRACKET) { 
+            advance(); 
+            if (currentToken.type != T_INT) syntaxError("o tamanho do vetor/matriz '%s' deve ser um numero inteiro", name);
+            arraySize = atoi(currentToken.lexeme);
+            advance(); 
+            if (currentToken.type != T_RBRACKET) syntaxError("esperado ']'");
+            advance(); 
+            isArray = 1; 
+
+            if (currentToken.type == T_LBRACKET) {
+                advance(); 
+                if (currentToken.type != T_INT) syntaxError("o numero de colunas da matriz '%s' deve ser inteiro", name);
+                arrayCols = atoi(currentToken.lexeme);
+                advance(); 
+                if (currentToken.type != T_RBRACKET) syntaxError("esperado ']'");
+                advance(); 
+                isArray = 2; 
+            }
+        }
+
+        AST* declNode = createDeclNode(name, type, isArray, arraySize, arrayCols);
+
+        if (currentToken.type == T_ASSIGN) {
+            advance(); 
+
+            if (isArray) {
+                if (currentToken.type != T_LBRACE) syntaxError("esperado '{' para inicializar o vetor '%s'", name);
+                advance(); 
+
+                AST* blockNode = malloc(sizeof(AST));
+                blockNode->type = NODE_BLOCK;
+                blockNode->block.count = 0;
+                blockNode->block.children[blockNode->block.count++] = declNode;
+
+                int currentIndex = 0;
+                while (currentToken.type != T_RBRACE) {
+                    if (currentIndex >= arraySize) semanticError("Muitos elementos na inicializacao do vetor '%s' (Max: %d)!", name, arraySize);
+                    AST* valNode = parseLogical(); 
+                    AST* idxNode = createIntNode(currentIndex);
+                    
+                    AST* assignNode = createArrayAssignNode(name, idxNode, NULL, valNode);
+                    blockNode->block.children[blockNode->block.count++] = assignNode;
+                    currentIndex++;
+
+                    if (currentToken.type == T_COMMA) advance(); 
+                    else if (currentToken.type != T_RBRACE) syntaxError("esperado ',' ou '}' na inicializacao do vetor");
+                }
+                advance(); 
+
+                if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' apos inicializacao do vetor");
+                advance(); 
+                return blockNode;
+            } else {
+                AST* valueNode = parseLogical(); 
+                if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' apos inicializacao de '%s'", name);
+                advance(); 
+
+                AST* assignNode = createAssignNode(name, valueNode);
+                AST* blockNode = malloc(sizeof(AST));
+                blockNode->type = NODE_BLOCK;
+                blockNode->block.count = 2;
+                blockNode->block.children[0] = declNode;
+                blockNode->block.children[1] = assignNode;
+                return blockNode;
+            }
+        }
+
+        if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';' apos declaracao de '%s'", name);
+        advance(); 
+        return declNode;
+    }
+
+    if (currentToken.type == T_ID) {
+        char varName[100];
+        strcpy(varName, currentToken.lexeme);
+        advance(); 
+
+        AST* arrayIndex = NULL;
+        AST* arrayIndex2 = NULL; 
+        
+        if (currentToken.type == T_LBRACKET) {
+            advance(); 
+            arrayIndex = parseLogical();
+            if (currentToken.type != T_RBRACKET) syntaxError("esperado ']'");
+            advance(); 
+            
+            if (currentToken.type == T_LBRACKET) {
+                advance();
+                arrayIndex2 = parseLogical();
+                if (currentToken.type != T_RBRACKET) syntaxError("esperado ']'");
+                advance();
+            }
+        }
+
+        if (currentToken.type == T_ASSIGN) {
+            advance();
+            AST* value = parseLogical();
+            if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';'");
+            advance();
+            return arrayIndex ? createArrayAssignNode(varName, arrayIndex, arrayIndex2, value) : createAssignNode(varName, value);
+        }
+        else if (currentToken.type == T_INC) {
+            advance();
+            if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';'");
+            advance();
+            AST* varNode = arrayIndex ? createArrayAccessNode(varName, arrayIndex, arrayIndex2) : createVarNode(varName);
+            AST* oneNode = createIntNode(1);
+            AST* addNode = createBinOpNode(T_PLUS, varNode, oneNode);
+            return arrayIndex ? createArrayAssignNode(varName, arrayIndex, arrayIndex2, addNode) : createAssignNode(varName, addNode);
+        }
+        else if (currentToken.type == T_DEC) {
+            advance();
+            if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';'");
+            advance();
+            AST* varNode = arrayIndex ? createArrayAccessNode(varName, arrayIndex, arrayIndex2) : createVarNode(varName);
+            AST* oneNode = createIntNode(1);
+            AST* subNode = createBinOpNode(T_MINUS, varNode, oneNode);
+            return arrayIndex ? createArrayAssignNode(varName, arrayIndex, arrayIndex2, subNode) : createAssignNode(varName, subNode);
+        }
+        else if (currentToken.type == T_PLUS_ASSIGN || currentToken.type == T_MINUS_ASSIGN || 
+                 currentToken.type == T_MUL_ASSIGN || currentToken.type == T_DIV_ASSIGN) {
+            TokenType opType;
+            if (currentToken.type == T_PLUS_ASSIGN) opType = T_PLUS;
+            else if (currentToken.type == T_MINUS_ASSIGN) opType = T_MINUS;
+            else if (currentToken.type == T_MUL_ASSIGN) opType = T_MUL;
+            else opType = T_DIV;
+
+            advance();
+            AST* valueNode = parseLogical();
+            if (currentToken.type != T_SEMICOLON) syntaxError("esperado ';'");
+            advance();
+            
+            AST* varNode = arrayIndex ? createArrayAccessNode(varName, arrayIndex, arrayIndex2) : createVarNode(varName);
+            AST* binOpNode = createBinOpNode(opType, varNode, valueNode);
+            return arrayIndex ? createArrayAssignNode(varName, arrayIndex, arrayIndex2, binOpNode) : createAssignNode(varName, binOpNode);
+        } 
+        else {
+            syntaxError("esperado '=', '++', '--', '+=', '-=', '*=' ou '/=' apos o identificador '%s'", varName);
+        }
+    }
+
+    while (currentToken.type == T_SEMICOLON) {
+        advance();
+    }
+
+    syntaxError("comando invalido (nao se pode comecar com o token '%s')", currentToken.lexeme);
+    return NULL;
 }
 
-
-//parser de bloco
 AST* parseBlock() {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_BLOCK;
     node->block.count = 0;
 
-    currentScope++; // Entra em um novo escopo
+    currentScope++; 
 
     while (currentToken.type != T_RBRACE && currentToken.type != T_EOF) {
         if (currentToken.type == T_SEMICOLON) {
@@ -1558,24 +1456,28 @@ AST* parseBlock() {
     if (currentToken.type == T_RBRACE) {
         advance();
     } else {
-        printf("Erro: esperado '}'\n");
-        exit(1);
+        syntaxError("esperado '}' para fechar o bloco");
     }
 
-    // Desativa as variáveis DESTE escopo
     for (int i = 0; i < varCount; i++) {
-        if (symbolTable[i].scope == currentScope) {
+        if (symbolTable[i].scope == currentScope && symbolTable[i].isActive) {
+            
+            // NOVO: O puxão de orelhas se a variável foi esquecida
+            if (symbolTable[i].isUsed == 0) {
+                printf("\n[!] AVISO (Linha %d): Variavel '%s' declarada, mas nunca utilizada.\n", 
+                        symbolTable[i].line, symbolTable[i].name);
+            }
+            
             symbolTable[i].isActive = 0; // Fica invisível para os blocos de fora
         }
     }
     
-    currentScope--; // Volta para o escopo anterior
+    currentScope--; 
     return node;
 }
 
-//multiplas instruçoes
 AST* parseProgram() {
-    advance(); // Pega o primeiro token
+    advance(); 
 
     AST* programNode = malloc(sizeof(AST));
     programNode->type = NODE_BLOCK;
@@ -1583,6 +1485,21 @@ AST* parseProgram() {
 
     while (currentToken.type != T_EOF) {
         
+        // PONTO DE ATERRAGEM DO PANIC MODE
+        if (setjmp(panicBuffer) != 0) {
+            // Se caiu aqui, é porque houve um erro. Vamos Sincronizar!
+            currentScope = 0; // Prevenção de segurança de escopo
+            
+            // Engole todos os tokens até encontrar um ponto e vírgula ou uma chave
+            while (currentToken.type != T_SEMICOLON && currentToken.type != T_RBRACE && currentToken.type != T_EOF) {
+                advance();
+            }
+            if (currentToken.type == T_SEMICOLON || currentToken.type == T_RBRACE) {
+                advance(); // Consome o delimitador para recomeçar limpo
+            }
+            continue; // Tenta compilar a próxima linha!
+        }
+
         if (currentToken.type == T_SEMICOLON) {
             advance();
             continue;
@@ -1593,30 +1510,29 @@ AST* parseProgram() {
             continue;
         }
 
-        // NOVO CASO: expressão pura
-        if (currentToken.type == T_INT ||
-            currentToken.type == T_FLOAT ||
-            currentToken.type == T_LPAREN) {
-
+        if (currentToken.type == T_INT || currentToken.type == T_FLOAT || currentToken.type == T_LPAREN) {
             AST* expr = parseLogical();
-
-            // exige ;
-            if (currentToken.type == T_SEMICOLON) {
-                advance();
-            }
-
+            if (currentToken.type == T_SEMICOLON) advance();
             programNode->block.children[programNode->block.count++] = expr;
             continue;
         }
-        programNode->block.children[programNode->block.count++] = parseStatement();
-
         
+        AST* stmt = parseStatement();
+        if (stmt != NULL) {
+            programNode->block.children[programNode->block.count++] = stmt;
+        }
+    }
+
+    for (int i = 0; i < varCount; i++) {
+        if (symbolTable[i].scope == 0 && symbolTable[i].isActive && symbolTable[i].isUsed == 0) {
+            printf("\n[!] AVISO (Linha %d): Variavel '%s' declarada, mas nunca utilizada.\n", 
+                    symbolTable[i].line, symbolTable[i].name);
+        }
     }
 
     return programNode;
 }
 
-//cria nó char
 AST* createCharNode(char value) {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_CHAR;
@@ -1624,7 +1540,6 @@ AST* createCharNode(char value) {
     return node;
 }
 
-//cria nó boolean
 AST* createBoolNode(int value) {
     AST* node = malloc(sizeof(AST));
     node->type = NODE_BOOL;
@@ -1652,46 +1567,32 @@ AST* createReadNode(char* varName) {
     strcpy(node->readStmt.varName, varName);
     
     node->symbolIndex = findVar(varName);
-    if (node->symbolIndex == -1) {
-        printf("Erro: Variavel '%s' nao declarada na leitura!\n", varName);
-        exit(1);
-    }
+    if (node->symbolIndex == -1) semanticError("Variavel '%s' nao declarada na leitura!", varName);
+    symbolTable[node->symbolIndex].isInitialized = 1;
     return node;
 }
 
-//funcao de avaliçao da arvore AST
 float evaluate(AST* node) {
-
+    if (node->type == NODE_ARRAY_ACCESS || node->type == NODE_ARRAY_ASSIGN) return 0;
     if (node == NULL) return 0;
-    //printf("DEBUG: Executando %s\n", nodeTypeToString(node->type));
 
     if (node->type == NODE_SWITCH) {
         if (node->switchStmt.expr) evaluate(node->switchStmt.expr);
         for(int i = 0; i < node->switchStmt.caseCount; i++) {
-            if(node->switchStmt.cases[i]->caseStmt.matchExpr) {
-                evaluate(node->switchStmt.cases[i]->caseStmt.matchExpr);
-            }
-            if(node->switchStmt.cases[i]->caseStmt.body) {
-                evaluate(node->switchStmt.cases[i]->caseStmt.body);
-            }
+            if(node->switchStmt.cases[i]->caseStmt.matchExpr) evaluate(node->switchStmt.cases[i]->caseStmt.matchExpr);
+            if(node->switchStmt.cases[i]->caseStmt.body) evaluate(node->switchStmt.cases[i]->caseStmt.body);
         }
         return 0;
     }
 
-    if (node->type == NODE_DECL) {
-        return 0;
-    }
+    if (node->type == NODE_DECL) return 0;
 
-    //percorre o bloco
     if (node->type == NODE_BLOCK) {
         float res = 0;
-        for (int i = 0; i < node->block.count; i++) {
-            res = evaluate(node->block.children[i]);
-        }
-        return res; // Não precisa mais mexer em escopo aqui
+        for (int i = 0; i < node->block.count; i++) res = evaluate(node->block.children[i]);
+        return res; 
     }
 
-    //if
      if (node->type == 6 || node->type == NODE_IF) {
         if (node->control.condition) evaluate(node->control.condition);
         if (node->control.thenBranch) evaluate(node->control.thenBranch);
@@ -1699,22 +1600,15 @@ float evaluate(AST* node) {
         return 0;
     }
 
-    // atribuição
     if (node->type == NODE_ASSIGN) {
         int pos = node->symbolIndex; 
-
         if (symbolTable[pos].type == TYPE_STRING) {
-            // NOVO: Na passada silenciosa, pega a palavra e salva na tabela!
-            if (node->assign.value->type == NODE_STRING) {
-                strcpy(symbolTable[pos].value.s, node->assign.value->stringValue);
-            }
+            if (node->assign.value->type == NODE_STRING) strcpy(symbolTable[pos].value.s, node->assign.value->stringValue);
             return 0; 
         }
 
-        // Checagem Semântica (Incompatibilidade)
         if (symbolTable[pos].type == TYPE_CHAR && node->assign.value->type == NODE_STRING) {
-            printf("Erro Semantico: Incompatibilidade de tipos! Nao se pode atribuir uma STRING (Texto) a uma variavel CHAR.\n");
-            exit(1);
+            semanticError("Incompatibilidade de tipos! Nao se pode atribuir uma STRING (Texto) a uma variavel CHAR.");
         }
 
         float val = evaluate(node->assign.value);
@@ -1727,46 +1621,22 @@ float evaluate(AST* node) {
         return val;
     }
 
-    // número inteiro
-    if (node->type == NODE_INT) {
-        return node->intValue;
-    }
-
-    // número float
-    if (node->type == NODE_FLOAT) {
-        return node->floatValue;
-    }
-
-    //char
-    if (node->type == NODE_CHAR) {
-        return node->charValue;
-    }
-
-    //boolean
-    if (node->type == NODE_BOOL) {
-        return node->boolValue;
-    }
+    if (node->type == NODE_INT) return node->intValue;
+    if (node->type == NODE_FLOAT) return node->floatValue;
+    if (node->type == NODE_CHAR) return node->charValue;
+    if (node->type == NODE_BOOL) return node->boolValue;
 
     if (node->type == NODE_UNOP) {
-
         float val = evaluate(node->unop.expr);
-
         switch (node->unop.op) {
-            case T_NOT:
-                return !val;
-
-            default:
-                printf("Operador unario desconhecido\n");
-                exit(1);
+            case T_NOT: return !val;
+            default: semanticError("Operador unario desconhecido");
         }
     }
 
-    // operação binária
     if (node->type == NODE_BINOP) {
-
         if (node->binop.left->type == NODE_STRING || node->binop.right->type == NODE_STRING) {
-            printf("Erro Semantico: Operacao invalida! Nao e possivel realizar operacoes aritmeticas ou relacionais com STRINGS (Texto).\n");
-            exit(1);
+            semanticError("Operacao invalida! Nao e possivel realizar operacoes aritmeticas com STRINGS.");
         }
 
         float left = evaluate(node->binop.left);
@@ -1785,36 +1655,22 @@ float evaluate(AST* node) {
             case T_NEQ: return left != right;
             case T_AND: return (left != 0 && right != 0);
             case T_OR:  return (left != 0 || right != 0);
-
-            default:
-                printf("Operador desconhecido\n");
-                exit(1);
+            default: semanticError("Operador desconhecido");
         }
     }
 
-    //explicita
     if (node->type == NODE_CAST) {
         float val = evaluate(node->cast.expr);
-
-        if (node->cast.type == TYPE_INT)
-            return (int)val;
-        if (node->cast.type == TYPE_FLOAT)
-            return (float)val;
-        if (node->cast.type == TYPE_BOOL)
-            return (val != 0);
+        if (node->cast.type == TYPE_INT) return (int)val;
+        if (node->cast.type == TYPE_FLOAT) return (float)val;
+        if (node->cast.type == TYPE_BOOL) return (val != 0);
     }
 
-    // variável
     if (node->type == NODE_VAR) {
         int pos = node->symbolIndex;
-        if (symbolTable[pos].type == TYPE_INT) {
-            return (float)symbolTable[pos].value.i;
-        } else {
-            return symbolTable[pos].value.f;
-        }
+        if (symbolTable[pos].type == TYPE_INT) return (float)symbolTable[pos].value.i;
+        else return symbolTable[pos].value.f;
     }
-
-    
 
      if (node->type == NODE_WHILE) {
         if (node->control.condition) evaluate(node->control.condition);
@@ -1822,21 +1678,10 @@ float evaluate(AST* node) {
         return 0;
     }
 
-    // --- NOVOS NÓS DE I/O E STRINGS ---
-    if (node->type == NODE_STRING) {
-        return 0; 
-    }
+    if (node->type == NODE_STRING) return 0; 
+    if (node->type == NODE_PRINT) { evaluate(node->printStmt.expr); return 0; }
+    if (node->type == NODE_READ) return 0; 
 
-    if (node->type == NODE_PRINT) {
-        evaluate(node->printStmt.expr); // Apenas avalia a expressão de dentro para checar se as variáveis existem
-        return 0;
-    }
-
-    if (node->type == NODE_READ) {
-        return 0; // O erro de não declaração já foi pego no Parser
-    }
-
-    // --- NOVOS NÓS DE LAÇOS (FOR, DO/WHILE, BREAK, CONTINUE) ---
     if (node->type == NODE_FOR) {
         if(node->forLoop.init) evaluate(node->forLoop.init);
         if(node->forLoop.condition) evaluate(node->forLoop.condition);
@@ -1851,45 +1696,26 @@ float evaluate(AST* node) {
         return 0;
     }
 
-    if (node->type == NODE_BREAK || node->type == NODE_CONTINUE) {
-        return 0;
-    }
+    if (node->type == NODE_BREAK || node->type == NODE_CONTINUE) return 0;
     
-    printf("Erro na avaliacao - tipo: %d\n", node->type);
-    exit(1);
-
-    
+    semanticError("Erro inesperado na avaliacao (tipo: %d)", node->type);
+    return 0;
 }
-// Imprime a indentação para manter o código C gerado organizado
+
 void printIndent(int indent) {
-    for(int i = 0; i < indent; i++) {
-        printf("    ");
-    }
+    for(int i = 0; i < indent; i++) printf("    ");
 }
 
-// Gera o código C para Expressões (números, variáveis, operações, cast)
 void generateC_expr(AST* node) {
     if (!node) return;
 
     switch(node->type) {
-        case NODE_STRING:
-            printf("\"%s\"", node->stringValue);
-            break;
-        case NODE_INT:
-            printf("%d", node->intValue);
-            break;
-        case NODE_FLOAT:
-            printf("%.1f", node->floatValue);
-            break;
-        case NODE_CHAR:
-            printf("'%c'", node->charValue);
-            break;
-        case NODE_BOOL:
-            printf("%s", node->boolValue ? "true" : "false");
-            break;
-        case NODE_VAR:
-            printf("%s", node->varName);
-            break;
+        case NODE_STRING: printf("\"%s\"", node->stringValue); break;
+        case NODE_INT: printf("%d", node->intValue); break;
+        case NODE_FLOAT: printf("%.1f", node->floatValue); break;
+        case NODE_CHAR: printf("'%c'", node->charValue); break;
+        case NODE_BOOL: printf("%s", node->boolValue ? "true" : "false"); break;
+        case NODE_VAR: printf("%s", node->varName); break;
         case NODE_BINOP:
             printf("(");
             generateC_expr(node->binop.left);
@@ -1906,7 +1732,6 @@ void generateC_expr(AST* node) {
                 case T_NEQ:   printf(" != "); break;
                 case T_AND:   printf(" && "); break;
                 case T_OR:    printf(" || "); break;
-                case NODE_STRING:   printf("\"%s\"", node->stringValue); break;
                 default: break;
             }
             generateC_expr(node->binop.right);
@@ -1928,20 +1753,16 @@ void generateC_expr(AST* node) {
             generateC_expr(node->cast.expr);
             printf(")");
             break;
-        default:
-            break;
+        default: break;
     }
 }
 
-// Gera o código C para Statements (Declarações, Blocos, If, While)
 void generateC(AST* node, int indent) {
     if (node == NULL) return;
 
     switch(node->type) {
         case NODE_BLOCK:
-            for(int i = 0; i < node->block.count; i++) {
-                generateC(node->block.children[i], indent);
-            }
+            for(int i = 0; i < node->block.count; i++) generateC(node->block.children[i], indent);
             break;
 
         case NODE_DECL:
@@ -1969,10 +1790,6 @@ void generateC(AST* node, int indent) {
         case NODE_READ:
             printIndent(indent);
             int pos = findVar(node->readStmt.varName);
-            if (pos == -1) {
-                printf("Erro: Variável não declarada na leitura.\n");
-                exit(1);
-            }
             DataType tr = symbolTable[pos].type;
             if (tr == TYPE_INT || tr == TYPE_BOOL) printf("scanf(\"%%d\", &%s);\n", node->readStmt.varName);
             else if (tr == TYPE_FLOAT) printf("scanf(\"%%f\", &%s);\n", node->readStmt.varName);
@@ -1983,7 +1800,6 @@ void generateC(AST* node, int indent) {
             printIndent(indent);
             printf("// TAC: %s = ...\n", node->assign.varName); 
             printIndent(indent);
-            
             printf("%s = ", node->assign.varName);
             generateC_expr(node->assign.value);
             printf(";\n");
@@ -1991,9 +1807,6 @@ void generateC(AST* node, int indent) {
 
         case NODE_IF:
             printIndent(indent);
-            printf("// TAC: tX = condicao; ifFalse tX goto L_ELSE;\n");
-            printIndent(indent);
-            
             printf("if (");
             generateC_expr(node->control.condition);
             printf(") {\n");
@@ -2015,11 +1828,7 @@ void generateC(AST* node, int indent) {
             printf("while (");
             generateC_expr(node->control.condition);
             printf(") {\n");
-            
-            if (node->control.thenBranch) {
-                generateC(node->control.thenBranch, indent + 1);
-            }
-            
+            if (node->control.thenBranch) generateC(node->control.thenBranch, indent + 1);
             printIndent(indent);
             printf("}\n");
             break;
@@ -2063,9 +1872,7 @@ void generateC(AST* node, int indent) {
         case NODE_DO_WHILE:
             printIndent(indent);
             printf("do {\n");
-            if (node->doWhileLoop.body) {
-                generateC(node->doWhileLoop.body, indent + 1);
-            }
+            if (node->doWhileLoop.body) generateC(node->doWhileLoop.body, indent + 1);
             printIndent(indent);
             printf("} while (");
             generateC_expr(node->doWhileLoop.condition);
@@ -2073,13 +1880,6 @@ void generateC(AST* node, int indent) {
             break;
 
         case NODE_FOR:
-            printIndent(indent);
-            printf("// --- TAC DO LOOP FOR ---\n");
-            printIndent(indent);
-            printf("// L_START:\n");
-            printIndent(indent);
-            printf("// t_cond = condicao; ifFalse t_cond goto L_END;\n");
-            
             printIndent(indent);
             printf("for (");
             if (node->forLoop.init && node->forLoop.init->type == NODE_ASSIGN) {
@@ -2095,14 +1895,11 @@ void generateC(AST* node, int indent) {
             }
             printf(") {\n");
             
-            if (node->forLoop.body) {
-                generateC(node->forLoop.body, indent + 1);
-            }
+            if (node->forLoop.body) generateC(node->forLoop.body, indent + 1);
             printIndent(indent);
             printf("}\n");
             break; 
 
-        // Se expressões soltas acabarem dentro do bloco (avulsas)
         case NODE_INT:
         case NODE_FLOAT:
         case NODE_CHAR:
@@ -2116,16 +1913,27 @@ void generateC(AST* node, int indent) {
             printf(";\n");
             break;
 
-        default:
-            break;
+        default: break;
     }
 }
 
-// Retorna o tamanho exato da string em tempo de compilação
 int getStringSize(int index) {
     if (index < varCount) {
         int len = strlen(symbolTable[index].value.s);
-        if (len > 0) return len + 1; // Retorna o tamanho da palavra + 1
+        if (len > 0) return len + 1; 
     }
-    return 255; // Padrão de segurança caso seja um read() e a gente não saiba o tamanho
+    return 255; 
+}
+
+int isSymbolArray(int index) {
+    if (index < varCount) return symbolTable[index].isArray;
+    return 0;
+}
+int getSymbolArraySize(int index) {
+    if (index < varCount) return symbolTable[index].arraySize;
+    return 0;
+}
+int getSymbolArrayCols(int index) {
+    if (index < varCount) return symbolTable[index].arrayCols;
+    return 0;
 }

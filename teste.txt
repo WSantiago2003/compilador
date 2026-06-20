@@ -1,36 +1,7 @@
-string msg = "Testando Onda 1";
-print(msg);
+int a;
+int lixo;
+int b = 10;
 
-int a = 10;
 print(a);
 
-a += 5;
-print(a);
-
-a -= 3;
-print(a);
-
-a *= 2;
-print(a);
-
-a /= 4;
-print(a);
-
-a++;
-print(a);
-
-a--;
-print(a);
-
-string laco = "Testando o FOR";
-print(laco);
-
-int i;
-for (i = 0; i <= 10; i += 2) {
-    print(i);
-}
-
-int j;
-for (j = 3; j > 0; j--) {
-    print(j);
-}
+b = b + 1;

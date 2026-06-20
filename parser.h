@@ -11,6 +11,12 @@ typedef struct {
     DataType type;
     int scope;
     int isActive;
+    int isArray;
+    int arraySize;
+    int arrayCols;
+    int line;
+    int isInitialized;
+    int isUsed;
     union {
         int i;
         float f;
@@ -43,6 +49,8 @@ typedef enum {
     NODE_CASE,
     NODE_BREAK,
     NODE_CONTINUE,
+    NODE_ARRAY_ACCESS,
+    NODE_ARRAY_ASSIGN,
 
 } NodeType;
 
@@ -58,6 +66,20 @@ typedef struct AST {
         char varName[50]; 
         char charValue;
         int boolValue;
+
+        // Acesso a vetor: notas[i]
+        struct {
+            struct AST* index;
+            struct AST* index2;
+        } arrayAccess;
+
+        // Atribuição de vetor: notas[i] = 10
+        struct {
+            char varName[50];
+            struct AST* index;
+            struct AST* index2;
+            struct AST* value;
+        } arrayAssign;
         
 
         // Operações Binárias (+, -, *, /, >, <, etc)
@@ -100,6 +122,9 @@ typedef struct AST {
         struct {
             char varName[50];
             DataType type;
+            int isArray;
+            int arraySize;
+            int arrayCols;
         } decl;
 
         struct {
@@ -142,6 +167,8 @@ typedef struct AST {
     // A union termina aqui. O 'type' lá em cima dirá qual desses campos usar.
 } AST;
 
+extern int errorCount;
+
 // Função principal
 AST* parseExpression();
 void advance();
@@ -171,4 +198,10 @@ AST* createStringNode(char* value);
 AST* createPrintNode(AST* expr);
 AST* createReadNode(char* varName);
 int getStringSize(int index);
+AST* createDeclNode(char* name, DataType type, int isArray, int arraySize, int arrayCols);
+int isSymbolArray(int index);
+int getSymbolArraySize(int index);
+AST* createArrayAccessNode(char* name, AST* indexExpr, AST* index2expr);
+AST* createArrayAssignNode(char* name, AST* indexExpr, AST* index2expr, AST* value);
+int getSymbolArrayCols(int index);
 #endif

@@ -6,6 +6,10 @@
 char input[1000];
 int pos = 0;
 
+// NOVO: Contadores Globais de Rastreamento
+int currentLine = 1;
+int currentCol = 1;
+
 char* tokenToString(TokenType type) {
     switch(type) {
         case T_ID: return "ID";
@@ -30,7 +34,6 @@ char* tokenToString(TokenType type) {
         case T_EQ: return "EQ";
         case T_NEQ: return "NEQ";
     
-
         case T_AND: return "AND";
         case T_OR: return "OR";
         case T_NOT: return "NOT";
@@ -70,11 +73,25 @@ Token nextToken()
     int i = 0;
 
     memset(token.lexeme, 0, sizeof(token.lexeme));
-    // pular espaços
-    while (input[pos] == ' ' || input[pos] == '\n' || input[pos] == '\t' || input[pos] == '\r')
-    pos++;
+    
+    // NOVO: Pular espaços e rastrear Linhas/Colunas
+    while (input[pos] == ' ' || input[pos] == '\n' || input[pos] == '\t' || input[pos] == '\r') {
+        if (input[pos] == '\n') {
+            currentLine++;    // Desce a linha
+            currentCol = 1;   // Volta pro início
+        } else if (input[pos] == '\t') {
+            currentCol += 4;  // Tabulação
+        } else {
+            currentCol++;     // Espaço simples
+        }
+        pos++;
+    }
 
     char c = input[pos];
+
+    // CARIMBA A POSIÇÃO EXATA ONDE O TOKEN COMEÇA
+    token.line = currentLine;
+    token.column = currentCol;
 
     // EOF
     if (input[pos] == '\0') {
@@ -87,11 +104,11 @@ Token nextToken()
     if (isLetter(c)) {
         while (isLetter(input[pos]) || isDigit(input[pos])) {
             token.lexeme[i++] = input[pos++];
+            currentCol++; // Acompanha o tamanho da palavra
         }
         token.lexeme[i] = '\0';
 
         // palavras-chave
-        
         if (strcmp(token.lexeme, "if") == 0) token.type = T_IF;
         else if (strcmp(token.lexeme, "else") == 0) token.type = T_ELSE;
         else if (strcmp(token.lexeme, "while") == 0) token.type = T_WHILE;
@@ -121,41 +138,43 @@ Token nextToken()
 
     // NÚMEROS
     if (isDigit(c)) {
-    int hasDot = 0;
+        int hasDot = 0;
 
-    while (isDigit(input[pos]) || input[pos] == '.') {
-        if (input[pos] == '.') {
-            if (hasDot) {
-                printf("Erro léxico: número inválido\n");
-                exit(1);
+        while (isDigit(input[pos]) || input[pos] == '.') {
+            if (input[pos] == '.') {
+                if (hasDot) {
+                    printf("Erro lexico na Linha %d, Coluna %d: numero invalido\n", token.line, token.column);
+                    exit(1);
+                }
+                hasDot = 1;
             }
-            hasDot = 1;
+
+            token.lexeme[i++] = input[pos++];
+            currentCol++; // Acompanha o tamanho do número
         }
 
-        token.lexeme[i++] = input[pos++];
-    }
+        token.lexeme[i] = '\0';
+        token.type = hasDot ? T_FLOAT : T_INT;
 
-    token.lexeme[i] = '\0';
-    token.type = hasDot ? T_FLOAT : T_INT;
-
-    return token;
+        return token;
     }
 
     // STRINGS
     if (c == '"') {
-        pos++; // pula "
+        pos++; currentCol++; // pula " inicial
 
         while (input[pos] != '"' && input[pos] != '\0') {
             token.lexeme[i++] = input[pos++];
+            currentCol++; // Acompanha as letras dentro da string
         }
 
         token.lexeme[i] = '\0';
 
         if (input[pos] == '\0') {
-            printf("Erro léxico: string não fechada\n");
+            printf("Erro lexico na Linha %d, Coluna %d: string nao fechada\n", token.line, token.column);
             exit(1);
         }
-        pos++; // fecha "
+        pos++; currentCol++; // fecha "
 
         token.type = T_STRING;
         return token;
@@ -163,15 +182,16 @@ Token nextToken()
 
     // CHAR
     if (c == '\'') {
-        pos++;
+        pos++; currentCol++;
         token.lexeme[0] = input[pos++];
+        currentCol++;
         token.lexeme[1] = '\0';
 
         if (input[pos] != '\'') {
-            printf("Erro léxico: char inválido\n");
+            printf("Erro lexico na Linha %d, Coluna %d: char invalido\n", token.line, token.column);
             exit(1);
         }
-        pos++; // fecha '
+        pos++; currentCol++; // fecha '
 
         token.type = T_CHAR;
         return token;
@@ -181,9 +201,9 @@ Token nextToken()
     switch (c) {
         case '+': 
             if (input[pos + 1] == '+') {
-                token.type = T_INC; strcpy(token.lexeme, "++"); pos++;
+                token.type = T_INC; strcpy(token.lexeme, "++"); pos++; currentCol++;
             } else if (input[pos + 1] == '=') {
-                token.type = T_PLUS_ASSIGN; strcpy(token.lexeme, "+="); pos++;
+                token.type = T_PLUS_ASSIGN; strcpy(token.lexeme, "+="); pos++; currentCol++;
             } else {
                 token.type = T_PLUS; strcpy(token.lexeme, "+"); 
             }
@@ -191,9 +211,9 @@ Token nextToken()
             
         case '-': 
             if (input[pos + 1] == '-') {
-                token.type = T_DEC; strcpy(token.lexeme, "--"); pos++;
+                token.type = T_DEC; strcpy(token.lexeme, "--"); pos++; currentCol++;
             } else if (input[pos + 1] == '=') {
-                token.type = T_MINUS_ASSIGN; strcpy(token.lexeme, "-="); pos++;
+                token.type = T_MINUS_ASSIGN; strcpy(token.lexeme, "-="); pos++; currentCol++;
             } else {
                 token.type = T_MINUS; strcpy(token.lexeme, "-"); 
             }
@@ -201,7 +221,7 @@ Token nextToken()
 
         case '*':
             if (input[pos + 1] == '=') {
-                token.type = T_MUL_ASSIGN; strcpy(token.lexeme, "*="); pos++;
+                token.type = T_MUL_ASSIGN; strcpy(token.lexeme, "*="); pos++; currentCol++;
             } else {
                 token.type = T_MUL; strcpy(token.lexeme, "*");
             }
@@ -209,7 +229,7 @@ Token nextToken()
 
         case '/':
             if (input[pos + 1] == '=') {
-                token.type = T_DIV_ASSIGN; strcpy(token.lexeme, "/="); pos++;
+                token.type = T_DIV_ASSIGN; strcpy(token.lexeme, "/="); pos++; currentCol++;
             } else {
                 token.type = T_DIV; strcpy(token.lexeme, "/");
             }
@@ -217,9 +237,9 @@ Token nextToken()
         case ':': token.type = T_COLON; strcpy(token.lexeme, ":"); break;
         case '>':
             if (input[pos + 1] == '=') {
-                token.type = T_GTE; // Se você tiver o token maior-ou-igual no enum
+                token.type = T_GTE; 
                 strcpy(token.lexeme, ">=");
-                pos++; // Consome o '='
+                pos++; currentCol++; 
             } else {
                 token.type = T_GT;
                 strcpy(token.lexeme, ">");
@@ -228,9 +248,9 @@ Token nextToken()
 
         case '<':
             if (input[pos + 1] == '=') {
-                token.type = T_LTE; // Se você tiver o token menor-ou-igual no enum
+                token.type = T_LTE; 
                 strcpy(token.lexeme, "<=");
-                pos++; // Consome o '='
+                pos++; currentCol++; 
             } else {
                 token.type = T_LT;
                 strcpy(token.lexeme, "<");
@@ -240,7 +260,7 @@ Token nextToken()
             if(input[pos + 1] == '=') {
                 token.type = T_EQ;
                 strcpy(token.lexeme, "==");
-                pos++; // Consome o segundo '='
+                pos++; currentCol++; 
             } else {
                 token.type = T_ASSIGN;
                 strcpy(token.lexeme, "=");
@@ -249,9 +269,9 @@ Token nextToken()
 
         case '!':
             if (input[pos+1] == '=') {
-                pos++;
                 token.type = T_NEQ;
                 strcpy(token.lexeme, "!=");
+                pos++; currentCol++;
             } else {
                 token.type = T_NOT;
                 strcpy(token.lexeme, "!");
@@ -260,20 +280,22 @@ Token nextToken()
 
         case '&':
             if (input[pos+1] == '&') {
-                pos++;
                 token.type = T_AND;
+                strcpy(token.lexeme, "&&");
+                pos++; currentCol++;
             } else {
-                printf("Erro léxico: & inválido\n");
+                printf("Erro lexico na Linha %d, Coluna %d: '&' invalido\n", token.line, token.column);
                 exit(1);
             }
             break;
 
         case '|':
             if (input[pos+1] == '|') {
-                pos++;
                 token.type = T_OR;
+                strcpy(token.lexeme, "||");
+                pos++; currentCol++;
             } else {
-                printf("Erro léxico: | inválido\n");
+                printf("Erro lexico na Linha %d, Coluna %d: '|' invalido\n", token.line, token.column);
                 exit(1);
             }
             break;
@@ -288,11 +310,11 @@ Token nextToken()
         case ']': token.type = T_RBRACKET; strcpy(token.lexeme, "]"); break;
 
         default:
-            printf("Erro léxico: %c\n", c);
+            printf("Erro lexico na Linha %d, Coluna %d: caractere '%c' nao reconhecido\n", token.line, token.column, c);
             exit(1);
     }
     
-
     pos++;
+    currentCol++; // Soma a coluna para o caractere do switch
     return token;
 }

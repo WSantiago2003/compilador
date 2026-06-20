@@ -79,6 +79,7 @@ typedef struct {
     TokenType type;
     char lexeme[100];
     int line; // número da linha (pra erro)
+    int column;
 } Token;
 
 char* tokenToString(TokenType type);

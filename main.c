@@ -46,18 +46,21 @@ int main(int argc, char *argv[]) {
     printf("#include <stdio.h>\n");
     printf("#include <stdbool.h>\n");
     printf("#include <string.h>\n\n"); 
+    
     printf("int main() {\n");
     
-    // Isso aqui é comentário DENTRO do código C gerado, então tá liberado!
     printf("    // Variaveis Temporarias do TAC\n");
     for (int i = 0; i < varCount + totalTemps; i++) {
         DataType type = getTempType(i);
         if (type == TYPE_FLOAT) printf("    float t%d;\n", i);
         else if (type == TYPE_CHAR) printf("    char t%d;\n", i);
-        else if (type == TYPE_STRING) printf("    char t%d[255];\n", i);
-        else printf("    int t%d;\n", i);
+        // A MÁGICA ACONTECE AQUI: Declara a string e a sua variável de tamanho!
+        else if (type == TYPE_STRING) {
+            int size = getStringSize(i);
+            printf("    char t%d[%d];\n", i, size);
+            printf("    int t%d_len;\n", i); // Variável que guardará o tamanho
+        }
     }
-
     // Configura para o Modo 2 (Gera o TAC convertido na sintaxe do C)
     tacPrint = 2; 
     tempCount = 0;

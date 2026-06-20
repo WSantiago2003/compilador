@@ -380,8 +380,10 @@ char* generateTAC(AST* node) {
         } else if (tacPrint == 2) {
             DataType t = symbolTable[node->symbolIndex].type;
             if (t == TYPE_STRING) {
-                // Lê strings, inclusive com espaços
+                // Lê strings (inclusive com espaços) respeitando o limite de segurança do vetor
                 printf("    scanf(\" %%254[^\\n]\", %s);\n", varTemp); 
+                // Mede o que o usuário digitou e atualiza a variável companheira na hora!
+                printf("    %s_len = strlen(%s);\n", varTemp, varTemp);
             } else if (t == TYPE_CHAR) {
                 printf("    scanf(\" %%c\", &%s);\n", varTemp);
             } else if (t == TYPE_FLOAT) {
@@ -509,17 +511,22 @@ char* generateTAC(AST* node) {
         return temp;
     }
 
-    if (node->type == NODE_ASSIGN) {
+   if (node->type == NODE_ASSIGN) {
         char* varTemp = getVarTempByIndex(node->symbolIndex);
         AST* value = node->assign.value;
 
-        // NOVO: TRATAMENTO DE STRINGS (Atribui usando strcpy)
+        // TRATAMENTO DE STRINGS (Tempo de Compilação - Tamanho Fixo)
         if (symbolTable[node->symbolIndex].type == TYPE_STRING) {
             char* val = generateTAC(value);
+            // Pega o tamanho real da palavra (sem contar o \0)
+            int strLen = getStringSize(node->symbolIndex) - 1; 
+
             if (tacPrint == 1) {
                 printf("%s = %s;\n", varTemp, val);
+                printf("%s_len = %d;\n", varTemp, strLen); // Salva o tamanho no TAC
             } else if (tacPrint == 2) {
-                printf("    strcpy(%s, %s);\n", varTemp, val); // Código C seguro!
+                printf("    strcpy(%s, %s);\n", varTemp, val);
+                printf("    %s_len = %d;\n", varTemp, strLen); // Salva o tamanho no C
             }
             return NULL;
         }
@@ -1583,7 +1590,11 @@ float evaluate(AST* node) {
         int pos = node->symbolIndex; 
 
         if (symbolTable[pos].type == TYPE_STRING) {
-             return 0; // O código C real gerado fará a cópia
+            // NOVO: Na passada silenciosa, pega a palavra e salva na tabela!
+            if (node->assign.value->type == NODE_STRING) {
+                strcpy(symbolTable[pos].value.s, node->assign.value->stringValue);
+            }
+            return 0; 
         }
 
         // Checagem Semântica (Incompatibilidade)
@@ -1996,3 +2007,11 @@ void generateC(AST* node, int indent) {
     }
 }
 
+// Retorna o tamanho exato da string em tempo de compilação
+int getStringSize(int index) {
+    if (index < varCount) {
+        int len = strlen(symbolTable[index].value.s);
+        if (len > 0) return len + 1; // Retorna o tamanho da palavra + 1
+    }
+    return 255; // Padrão de segurança caso seja um read() e a gente não saiba o tamanho
+}

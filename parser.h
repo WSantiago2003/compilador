@@ -170,4 +170,5 @@ void generateC(AST* node, int indent);
 AST* createStringNode(char* value);
 AST* createPrintNode(AST* expr);
 AST* createReadNode(char* varName);
+int getStringSize(int index);
 #endif

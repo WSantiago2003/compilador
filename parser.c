@@ -104,6 +104,10 @@ DataType getNodeType(AST* node) {
     if (node->type == NODE_BINOP) {
         DataType left = getNodeType(node->binop.left);
         DataType right = getNodeType(node->binop.right);
+        
+        // NOVO: Regra da Concatenação
+        if (left == TYPE_STRING && right == TYPE_STRING) return TYPE_STRING;
+        
         if (left == TYPE_FLOAT || right == TYPE_FLOAT) return TYPE_FLOAT;
         return TYPE_INT;
     }
@@ -319,8 +323,21 @@ char* generateTAC(AST* node) {
         } else if (tacPrint == 2) {
             DataType t = symbolTable[node->symbolIndex].type;
             if (t == TYPE_STRING) {
-                printf("    scanf(\" %%254[^\\n]\", %s);\n", varTemp); 
-                printf("    %s_len = strlen(%s);\n", varTemp, varTemp);
+                printf("    {\n");
+                printf("        char _temp_buf[2048];\n");
+                printf("        scanf(\" %%2047[^\\n]\", _temp_buf);\n");
+                
+                // Segurança: Só dá free se a variável estava num estado Dinâmico!
+                printf("        if (%s_isDyn == 1 && %s != NULL) free(%s);\n", varTemp, varTemp, varTemp);
+                
+                // O caminho dinâmico: aloca exatamente o que é preciso
+                printf("        %s = (char*)malloc(strlen(_temp_buf) + 1);\n", varTemp);
+                printf("        strcpy(%s, _temp_buf);\n", varTemp);
+                printf("        %s_len = strlen(%s);\n", varTemp, varTemp);
+                
+                // Atualiza a bandeira para Dinâmico (para que no futuro seja libertado)
+                printf("        %s_isDyn = 1;\n", varTemp);
+                printf("    }\n");
             } else if (t == TYPE_CHAR) {
                 printf("    scanf(\" %%c\", &%s);\n", varTemp);
             } else if (t == TYPE_FLOAT) {
@@ -369,6 +386,26 @@ char* generateTAC(AST* node) {
 
         char* left = generateTAC(node->binop.left);
         char* right = generateTAC(node->binop.right);
+
+        // --- NOVO: LÓGICA DE GERAÇÃO PARA CONCATENAÇÃO ---
+        if (leftType == TYPE_STRING && rightType == TYPE_STRING) {
+            char* temp = newTemp();
+            int num = atoi(temp + 1);
+            tempTypes[num] = TYPE_STRING;
+
+            if (tacPrint == 1) {
+                printf("%s = %s + %s;\n", temp, left, right);
+            } else if (tacPrint == 2) {
+                // Pede um tanque com a soma dos dois tamanhos + 1 (\0)
+                printf("    %s = (char*)malloc(strlen(%s) + strlen(%s) + 1);\n", temp, left, right);
+                // Cola as duas palavras lá dentro!
+                printf("    strcpy(%s, %s);\n", temp, left);
+                printf("    strcat(%s, %s);\n", temp, right);
+                printf("    %s_len = strlen(%s);\n", temp, temp);
+                printf("    %s_isDyn = 1;\n", temp);
+            }
+            return temp;
+        }
 
         if (leftType == TYPE_INT && rightType == TYPE_FLOAT) {
             char* castTemp = newTemp();
@@ -461,16 +498,24 @@ char* generateTAC(AST* node) {
         char* varTemp = getVarTempByIndex(node->symbolIndex);
         AST* value = node->assign.value;
 
+        // TRATAMENTO DE STRINGS HÍBRIDAS (Atribuição)
         if (symbolTable[node->symbolIndex].type == TYPE_STRING) {
             char* val = generateTAC(value);
-            int strLen = getStringSize(node->symbolIndex) - 1; 
 
             if (tacPrint == 1) {
                 printf("%s = %s;\n", varTemp, val);
-                printf("%s_len = %d;\n", varTemp, strLen); 
+                printf("%s_len = strlen(%s);\n", varTemp, val); 
             } else if (tacPrint == 2) {
-                printf("    strcpy(%s, %s);\n", varTemp, val);
-                printf("    %s_len = %d;\n", varTemp, strLen); 
+                // Segurança: Se a string antiga era Dinâmica (1), limpamos a Heap!
+                // Se era Literal (0), não fazemos nada, apenas soltamos o fio.
+                printf("    if (%s_isDyn == 1 && %s != NULL) free(%s);\n", varTemp, varTemp, varTemp);
+                
+                // O caminho ultra-rápido: aponta diretamente para o texto literal na memória estática
+                printf("    %s = %s;\n", varTemp, val);
+                printf("    %s_len = strlen(%s);\n", varTemp, varTemp); 
+                
+                // Atualiza a bandeira para Literal
+                printf("    %s_isDyn = 0;\n", varTemp); 
             }
             return NULL;
         }
@@ -1635,10 +1680,21 @@ float evaluate(AST* node) {
     }
 
     if (node->type == NODE_BINOP) {
-        if (node->binop.left->type == NODE_STRING || node->binop.right->type == NODE_STRING) {
-            semanticError("Operacao invalida! Nao e possivel realizar operacoes aritmeticas com STRINGS.");
+        DataType leftType = getNodeType(node->binop.left);
+        DataType rightType = getNodeType(node->binop.right);
+
+        // NOVO: Tratamento Semântico para Strings
+        if (leftType == TYPE_STRING || rightType == TYPE_STRING) {
+            if (leftType != TYPE_STRING || rightType != TYPE_STRING) {
+                semanticError("Tipos incompativeis! So e possivel concatenar STRING com STRING.");
+            }
+            if (node->binop.op != T_PLUS) {
+                semanticError("Operacao invalida! Apenas o operador '+' e permitido para STRINGS.");
+            }
+            return 0; // Avaliação passa limpa!
         }
 
+        // Continua com a matemática normal para INT e FLOAT...
         float left = evaluate(node->binop.left);
         float right = evaluate(node->binop.right);
 

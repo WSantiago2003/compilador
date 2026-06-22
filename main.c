@@ -42,7 +42,8 @@ int main(int argc, char *argv[]) {
         // --- 2. GERAÇÃO DO CÓDIGO C (BASEADO DO TAC) ---
         printf("#include <stdio.h>\n");
         printf("#include <stdbool.h>\n");
-        printf("#include <string.h>\n\n"); 
+        printf("#include <string.h>\n"); 
+        printf("#include <stdlib.h>\n\n");
         
         printf("int main() {\n");
         
@@ -72,9 +73,10 @@ int main(int argc, char *argv[]) {
                 if (type == TYPE_FLOAT) printf("    float t%d;\n", i);
                 else if (type == TYPE_CHAR) printf("    char t%d;\n", i);
                 else if (type == TYPE_STRING) {
-                    int size = getStringSize(i);
-                    printf("    char t%d[%d];\n", i, size);
-                    printf("    int t%d_len;\n", i);
+                    printf("    char* t%d = NULL;\n", i);
+                    printf("    int t%d_len = 0;\n", i);
+                    // NOVO: A bandeira Híbrida de Runtime!
+                    printf("    int t%d_isDyn = 0;\n", i); 
                 } else {
                     printf("    int t%d;\n", i);
                 }

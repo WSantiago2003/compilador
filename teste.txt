@@ -1,7 +1,11 @@
-int a;
-int lixo;
-int b = 10;
 
-print(a);
+    string nome;
+    string sobrenome;
+    string completo;
 
-b = b + 1;
+    nome = "Luana ";
+    sobrenome = "Rodrigues";
+
+    completo = nome + sobrenome;
+
+    print(completo);
